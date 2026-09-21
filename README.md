@@ -80,6 +80,24 @@ it, and the conversation id, space-separated. `resume` reads the last
 line; `fresh` appends a new one. A campaign with no recorded
 conversation resumes as fresh, and says so.
 
+## Worktrees (optional)
+
+A campaign with no `worktree` key runs in its plain directory. With
+one:
+
+```yaml
+worktree:
+  repo: ~/code/site     # the repository to take a worktree of
+  branch: wt/site-work  # created from the remote default branch if missing
+```
+
+`resume` and `fresh` ensure the worktree exists, use it as the
+workspace cwd, and add it to the agent's paths. This plugin never
+removes a worktree — herdr's own `worktree remove --force` deletes
+uncommitted work, and removal stays a human act. It uses plain git, not
+`herdr worktree`, because that family takes no `--env` (the address
+could not be exported) and registers a stray base workspace.
+
 ## The verbs
 
 - `herdr-estate resume [<address>]` — continue the campaign's latest

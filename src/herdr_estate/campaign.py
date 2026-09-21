@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import frontmatter
+from . import worktree as worktree_mod
 from .config import DEFAULT_AGENT_KIND, DEFAULT_CAMPAIGNS_DIR, parse_address
 from .errors import ConfigError
 from .paths import expand
@@ -49,7 +50,18 @@ def resolve(estates: dict[str, dict], address: str) -> Campaign:
     prompt_files = [expand(p) for p in row.get("prompts", [])]
     raw_flags = fm.get(kind)
     kind_flags = raw_flags if isinstance(raw_flags, dict) else {}
+
+    # A campaign with no `worktree` key runs in the estate's plain
+    # directory. With one, resume/fresh ensure it exists, use it as the
+    # workspace cwd, and add it to the agent's paths (design note,
+    # "Worktrees: optional").
+    workdir = root
+    wt = fm.get("worktree")
+    if isinstance(wt, dict) and wt.get("repo") and wt.get("branch"):
+        workdir = worktree_mod.ensure_worktree(wt["repo"], wt["branch"])
+        add_dirs.append(workdir)
+
     return Campaign(address=address, estate=estate_name, name=campaign_name,
-                     dir=cdir, workdir=root, kind=kind, add_dirs=add_dirs,
+                     dir=cdir, workdir=workdir, kind=kind, add_dirs=add_dirs,
                      prompt_files=prompt_files, kind_flags=kind_flags,
                      env=dict(row.get("env", {})))

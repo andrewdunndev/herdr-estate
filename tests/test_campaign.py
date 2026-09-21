@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from herdr_estate.campaign import resolve
 from herdr_estate.errors import ConfigError
@@ -77,6 +78,31 @@ class ResolveCampaign(unittest.TestCase):
             estates = {"home": {"root": str(root), "env": {"K": "V"}}}
             c = resolve(estates, "home/garden")
             self.assertEqual(c.env, {"K": "V"})
+
+    def test_no_worktree_key_uses_estate_root(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "home"
+            _make_estate(root, "garden")
+            estates = {"home": {"root": str(root)}}
+            with mock.patch("herdr_estate.campaign.worktree_mod.ensure_worktree") as ensure:
+                c = resolve(estates, "home/garden")
+            ensure.assert_not_called()
+            self.assertEqual(c.workdir, root)
+
+    def test_worktree_key_ensures_and_becomes_workdir(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "home"
+            _make_estate(root, "garden",
+                         "---\nworktree:\n  repo: /some/repo\n"
+                         "  branch: wt/site-work\n---\n")
+            estates = {"home": {"root": str(root)}}
+            wt_path = Path(d) / "the-worktree"
+            with mock.patch("herdr_estate.campaign.worktree_mod.ensure_worktree",
+                             return_value=wt_path) as ensure:
+                c = resolve(estates, "home/garden")
+            ensure.assert_called_once_with("/some/repo", "wt/site-work")
+            self.assertEqual(c.workdir, wt_path)
+            self.assertIn(wt_path, c.add_dirs)
 
 
 if __name__ == "__main__":
