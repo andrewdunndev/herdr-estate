@@ -17,13 +17,19 @@ are not shipped yet; see `.deviations.yaml`.
 
 ## Install
 
+Build the binary, then link the plugin:
+
 ```sh
+cargo build --release
 herdr plugin link /path/to/herdr-estate
 ```
 
-`plugin link` is dev mode: it registers the path as-is, with no build
-step, and edits take effect on the next herdr invocation. Then bind the
-actions to keys in your own `~/.config/herdr/config.toml`:
+`plugin link` is dev mode: it registers the path as-is and never runs
+the manifest's `[[build]]` table, so the binary needs to exist before
+you link it. Rebuilding after a source change takes effect on herdr's
+next invocation, no relink needed. `herdr plugin install` (a GitHub
+install, not dev mode) runs `[[build]]` itself. Then bind the actions
+to keys in your own `~/.config/herdr/config.toml`:
 
 ```toml
 [[keys.command]]
@@ -152,11 +158,12 @@ cp examples/estates.toml "$HERDR_PLUGIN_CONFIG_DIR/estates.toml"
 # edit its `root` to point at a real clone, e.g. one holding
 # examples/home/campaigns/{garden,taxes}/campaign.md
 
-bin/herdr-estate list
+cargo build --release
+target/release/herdr-estate list
 # home/garden                 new
 # home/taxes                  new
 
-bin/herdr-estate fresh home/garden --dry-run
+target/release/herdr-estate fresh home/garden --dry-run
 # would create:
 #   herdr workspace create --cwd ... --label home/garden ...
 # would start:
@@ -165,10 +172,17 @@ bin/herdr-estate fresh home/garden --dry-run
 
 ## Tests
 
-Standard library only, `unittest`, mocking the one herdr-call boundary
-(`herdr_estate.herdrcli.call_herdr`) and using temp directories for
-every filesystem-touching test:
-
 ```sh
-PYTHONPATH=src python3 -m unittest discover -s tests
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
 ```
+
+Unit tests cover pure logic. Everything that crosses the herdr CLI
+boundary is exercised against a fake `herdr` executable, pointed to by
+`$HERDR_BIN_PATH`, that records its exact argv and environment per call
+and replays canned responses, so a test asserts what herdr was actually
+asked to do rather than that a mock was called. The integration suite
+in `tests/cli.rs` drives the built binary itself: subcommands,
+`--dry-run`, exit codes, and address derivation from
+`$HERDR_WORKSPACE_ID`.
