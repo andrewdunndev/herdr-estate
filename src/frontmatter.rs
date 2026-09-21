@@ -72,9 +72,10 @@ fn strip_quotes(v: &str) -> String {
     let chars: Vec<char> = v.chars().collect();
     if chars.len() >= 2 {
         let first = chars[0];
-        let last = *chars.last().expect("checked len >= 2");
-        if first == last && (first == '"' || first == '\'') {
-            return chars[1..chars.len() - 1].iter().collect();
+        if let Some(&last) = chars.last() {
+            if first == last && (first == '"' || first == '\'') {
+                return chars[1..chars.len() - 1].iter().collect();
+            }
         }
     }
     v.to_string()
@@ -289,6 +290,60 @@ mod tests {
     fn quotes_stripped() {
         let d = parse_frontmatter("---\nagent: \"claude\"\n---\n");
         assert_eq!(s(&d["agent"]), "claude");
+    }
+
+    #[test]
+    fn single_char_value_is_left_alone() {
+        // Below strip_quotes's len>=2 guard — must not touch the byte,
+        // let alone index past it.
+        let d = parse_frontmatter("---\nagent: x\n---\n");
+        assert_eq!(s(&d["agent"]), "x");
+    }
+
+    // --- match_top / match_list_item / match_table_item: line-end and
+    // single-char-line boundaries, tested directly against the private
+    // matchers so an off-by-one at the end of a line panics loudly in
+    // the test rather than silently reading as "no match".
+
+    #[test]
+    fn match_top_colon_is_the_last_byte() {
+        assert_eq!(match_top("key:"), Some(("key", "")));
+    }
+
+    #[test]
+    fn match_top_no_colon_anywhere_is_none_not_a_panic() {
+        assert_eq!(match_top("key"), None);
+    }
+
+    #[test]
+    fn match_table_item_colon_is_the_last_byte() {
+        assert_eq!(match_table_item("  key:"), Some(("key", "")));
+    }
+
+    #[test]
+    fn match_table_item_no_colon_anywhere_is_none_not_a_panic() {
+        assert_eq!(match_table_item("  key"), None);
+    }
+
+    #[test]
+    fn match_list_item_dash_is_the_last_byte() {
+        // One char of indent, a dash, and nothing after it: no
+        // separator whitespace, so not a valid item.
+        assert_eq!(match_list_item(" -"), None);
+    }
+
+    #[test]
+    fn match_list_item_minimal_valid_item() {
+        assert_eq!(match_list_item(" - x"), Some("x"));
+    }
+
+    #[test]
+    fn frontmatter_text_ending_exactly_at_a_keys_colon() {
+        // The whole document — not just the line — ends at the colon:
+        // no trailing newline, nothing after it at all.
+        let d = parse_frontmatter("---\nworktree:");
+        let t = d["worktree"].as_table().unwrap();
+        assert!(t.is_empty());
     }
 
     #[test]

@@ -57,7 +57,9 @@ fn expand_vars(s: &str) -> String {
                 }
             }
         }
-        let ch = s[i..].chars().next().expect("i is a valid char boundary");
+        let Some(ch) = s[i..].chars().next() else {
+            break;
+        };
         out.push(ch);
         i += ch.len_utf8();
     }
@@ -148,6 +150,21 @@ mod tests {
             expand("$HERDR_ESTATE_TEST_UNSET/x"),
             PathBuf::from("$HERDR_ESTATE_TEST_UNSET/x")
         );
+    }
+
+    #[test]
+    fn expand_trailing_dollar_left_literal() {
+        // '$' as the very last byte: i + 1 < bytes.len() is false, so the
+        // char-copy path below must still run rather than skip a byte.
+        let _g = EnvGuard::unset(&["HOME"]);
+        assert_eq!(expand("a$"), PathBuf::from("a$"));
+    }
+
+    #[test]
+    fn expand_unterminated_brace_left_literal() {
+        // No closing '}' anywhere in the string.
+        let _g = EnvGuard::unset(&["HOME"]);
+        assert_eq!(expand("a${x"), PathBuf::from("a${x"));
     }
 
     #[test]
