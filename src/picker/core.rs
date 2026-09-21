@@ -177,9 +177,23 @@ fn state_label(state: &RowState) -> String {
     }
 }
 
+/// The first row index to draw so a `window`-tall page still contains
+/// `selected_idx` out of `total` rows. No separate "page" concept —
+/// just the smallest shift that keeps the selection on screen, clamped
+/// so the window never scrolls past the last page.
+fn scroll_offset(selected_idx: usize, total: usize, window: usize) -> usize {
+    if window == 0 || total <= window {
+        return 0;
+    }
+    let max_offset = total - window;
+    selected_idx.saturating_sub(window - 1).min(max_offset)
+}
+
 /// Render `state` as plain text lines: a filter line, then one line per
 /// filtered row (or a "no match" line), each truncated — never wrapped —
-/// to `width` chars, the whole frame truncated to `height` lines.
+/// to `width` chars, the whole frame truncated to `height` lines. When
+/// more rows are filtered in than fit, the window scrolls so the
+/// selected row is always among the lines drawn.
 pub fn view(state: &AppState, width: usize, height: usize) -> Vec<String> {
     let mut lines = Vec::new();
     if height == 0 {
@@ -195,10 +209,14 @@ pub fn view(state: &AppState, width: usize, height: usize) -> Vec<String> {
         return lines;
     }
 
-    for row in filtered {
-        if lines.len() >= height {
-            break;
-        }
+    let window = height - 1;
+    if window == 0 {
+        return lines;
+    }
+    let selected_idx = current_index(&filtered, &state.selected_address).unwrap_or(0);
+    let offset = scroll_offset(selected_idx, filtered.len(), window);
+
+    for row in filtered.into_iter().skip(offset).take(window) {
         let marker = if state.selected_address.as_deref() == Some(row.address.as_str()) {
             ">"
         } else {
@@ -306,6 +324,19 @@ mod tests {
     }
 
     #[test]
+    fn up_from_below_the_top_reselects_the_previous_row() {
+        // sample_rows sorts to: home/garden, lab/bench, home/taxes, ...
+        // Down twice then Up once must land back on the middle row, not
+        // clamp to the top (the only Up behaviour the existing tests
+        // exercised) or stay put.
+        let mut state = AppState::new(sample_rows());
+        state = update(state, Event::Down); // lab/bench
+        state = update(state, Event::Down); // home/taxes
+        state = update(state, Event::Up); // back to lab/bench
+        assert_eq!(state.selected_address.as_deref(), Some("lab/bench"));
+    }
+
+    #[test]
     fn enter_on_empty_filter_result_does_nothing() {
         let state = AppState::new(sample_rows());
         let state = update(state, Event::Char('z'));
@@ -358,6 +389,33 @@ mod tests {
     }
 
     #[test]
+    fn view_renders_a_literal_frame_for_one_row_of_each_state() {
+        // Hand-transcribed expected text, not view()'s own output over
+        // equivalent rows: pins the marker, the 30-wide address padding
+        // and the exact label text (including the dormant date and the
+        // live agent status) to literal strings, so a rendering
+        // regression that drops or reshapes any of them fails here
+        // instead of only failing a golden test that compares view()
+        // against itself.
+        let rows = vec![
+            live("home/garden", "working"),
+            dormant("home/kitchen", "2026-09-10"),
+            new_row("home/attic"),
+        ];
+        let state = AppState::new(rows);
+        let lines = view(&state, 60, 10);
+        assert_eq!(
+            lines,
+            vec![
+                "> ".to_string(),
+                "> home/garden                    live (working)".to_string(),
+                "  home/kitchen                   dormant  last 2026-09-10".to_string(),
+                "  home/attic                     new".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn view_truncates_every_line_at_narrow_widths() {
         let state = AppState::new(sample_rows());
         let lines = view(&state, 8, 20);
@@ -407,5 +465,71 @@ mod tests {
         let state = AppState::new(Vec::new());
         let lines = view(&state, 40, 20);
         assert!(lines.iter().any(|l| l == "no match"));
+    }
+
+    #[test]
+    fn no_match_at_height_one_returns_only_the_filter_line() {
+        // The filter line alone already fills a 1-line frame; the
+        // "no match" line must not be pushed past it.
+        let mut state = AppState::new(sample_rows());
+        for c in ['z', 'z', 'z'] {
+            state = update(state, Event::Char(c));
+        }
+        let lines = view(&state, 40, 1);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].starts_with('>'));
+    }
+
+    fn many_rows(n: usize) -> Vec<Row> {
+        (0..n).map(|i| new_row(&format!("home/c{i:02}"))).collect()
+    }
+
+    #[test]
+    fn view_drops_rows_past_height_with_no_scroll_regression() {
+        // Baseline: with the selection at the top, a short frame simply
+        // shows the first `height - 1` rows (unchanged from before the
+        // scroll window existed).
+        let state = AppState::new(many_rows(25));
+        let lines = view(&state, 40, 6);
+        assert_eq!(lines.len(), 6);
+        assert!(lines[1].contains("home/c00"));
+        assert!(lines[5].contains("home/c04"));
+    }
+
+    #[test]
+    fn view_scrolls_the_window_so_a_selection_past_the_page_is_still_drawn() {
+        let mut state = AppState::new(many_rows(25));
+        for _ in 0..24 {
+            state = update(state, Event::Down);
+        }
+        // Selection is now the last row, home/c24 — with no scrolling
+        // this would sit past a 6-line frame (5-row window) and never
+        // be drawn.
+        let lines = view(&state, 40, 6);
+        assert_eq!(lines.len(), 6);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with('>') && l.contains("home/c24")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn view_scrolls_back_to_the_top_page_when_selection_returns_there() {
+        let mut state = AppState::new(many_rows(25));
+        for _ in 0..24 {
+            state = update(state, Event::Down);
+        }
+        for _ in 0..24 {
+            state = update(state, Event::Up);
+        }
+        let lines = view(&state, 40, 6);
+        // Selection is back at the very first row: the window must have
+        // scrolled back up rather than staying pinned to the bottom.
+        assert!(
+            lines[1].starts_with('>') && lines[1].contains("home/c00"),
+            "{lines:?}"
+        );
     }
 }
