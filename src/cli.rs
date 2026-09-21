@@ -2,7 +2,14 @@
 
 use crate::config;
 use crate::errors::EstateError;
+use crate::picker;
 use crate::verbs;
+
+/// Default popup size for `pick`: the width/height an 80x20 popup pane
+/// suits, and what `--render-once` renders at with no `--width`/
+/// `--height` override.
+pub const PICK_DEFAULT_WIDTH: usize = 80;
+pub const PICK_DEFAULT_HEIGHT: usize = 20;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -15,6 +22,11 @@ pub enum Command {
         dry_run: bool,
     },
     List,
+    Pick {
+        render_once: bool,
+        width: usize,
+        height: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,12 +73,53 @@ pub fn parse_args(argv: &[String]) -> Result<Command, ParseError> {
             }
             Ok(Command::List)
         }
+        "pick" => parse_pick(rest),
         other => Err(ParseError {
             message: format!(
-                "argument verb: invalid choice: {other:?} (choose from 'resume', 'fresh', 'list')"
+                "argument verb: invalid choice: {other:?} (choose from 'resume', 'fresh', 'list', 'pick')"
             ),
         }),
     }
+}
+
+fn parse_pick(rest: &[String]) -> Result<Command, ParseError> {
+    let mut render_once = false;
+    let mut width = PICK_DEFAULT_WIDTH;
+    let mut height = PICK_DEFAULT_HEIGHT;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--render-once" => render_once = true,
+            "--width" => {
+                i += 1;
+                width = parse_dimension(rest.get(i), "--width")?;
+            }
+            "--height" => {
+                i += 1;
+                height = parse_dimension(rest.get(i), "--height")?;
+            }
+            other => {
+                return Err(ParseError {
+                    message: format!("unrecognized arguments: {other}"),
+                })
+            }
+        }
+        i += 1;
+    }
+    Ok(Command::Pick {
+        render_once,
+        width,
+        height,
+    })
+}
+
+fn parse_dimension(value: Option<&String>, flag: &str) -> Result<usize, ParseError> {
+    let raw = value.ok_or_else(|| ParseError {
+        message: format!("argument {flag}: expected one argument"),
+    })?;
+    raw.parse::<usize>().map_err(|_| ParseError {
+        message: format!("argument {flag}: invalid value: {raw:?}"),
+    })
 }
 
 /// `address` when given; otherwise the label of the workspace
@@ -109,6 +162,14 @@ fn dispatch(cmd: Command) -> Result<i32, EstateError> {
                 println!("{}", verbs::format_row(row));
             }
             Ok(0)
+        }
+        Command::Pick {
+            render_once,
+            width,
+            height,
+        } => {
+            let estates = config::load_estates(None)?;
+            picker::shell::run(&estates, render_once, width, height)
         }
     }
 }
@@ -202,6 +263,53 @@ mod tests {
     #[test]
     fn parse_rejects_a_second_positional() {
         assert!(parse_args(&args(&["resume", "home/garden", "home/taxes"])).is_err());
+    }
+
+    #[test]
+    fn parse_pick_with_no_flags_uses_the_popup_defaults() {
+        assert_eq!(
+            parse_args(&args(&["pick"])).unwrap(),
+            Command::Pick {
+                render_once: false,
+                width: PICK_DEFAULT_WIDTH,
+                height: PICK_DEFAULT_HEIGHT,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_pick_render_once_with_width_and_height() {
+        assert_eq!(
+            parse_args(&args(&[
+                "pick",
+                "--render-once",
+                "--width",
+                "40",
+                "--height",
+                "10"
+            ]))
+            .unwrap(),
+            Command::Pick {
+                render_once: true,
+                width: 40,
+                height: 10,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_pick_rejects_a_non_numeric_width() {
+        assert!(parse_args(&args(&["pick", "--width", "wide"])).is_err());
+    }
+
+    #[test]
+    fn parse_pick_rejects_a_dangling_width_flag() {
+        assert!(parse_args(&args(&["pick", "--width"])).is_err());
+    }
+
+    #[test]
+    fn parse_pick_rejects_an_unknown_flag() {
+        assert!(parse_args(&args(&["pick", "--nope"])).is_err());
     }
 
     #[test]
