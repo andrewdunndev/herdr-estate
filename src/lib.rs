@@ -2,6 +2,7 @@
 //! the six words this crate uses in their one defined sense.
 
 pub mod errors;
+pub mod frontmatter;
 pub mod paths;
 pub mod verb;
 
