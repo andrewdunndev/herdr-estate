@@ -174,6 +174,17 @@ GREETING = "hi"
     }
 
     #[test]
+    fn empty_env_value_counts_as_unset() {
+        // Mirrors paths.rs's test of the same name for this module's own
+        // copy of the same truthiness rule. Direct, not routed through
+        // config_path()'s is_file() gate — that gate would swallow the
+        // difference on a test machine with no ./estates.toml in the
+        // working directory either way.
+        let _g = EnvGuard::set(&[("HERDR_ESTATE_TEST_EMPTY", "")]);
+        assert_eq!(non_empty_env("HERDR_ESTATE_TEST_EMPTY"), None);
+    }
+
+    #[test]
     fn config_path_falls_back_when_plugin_config_dir_unset() {
         let home = TempDir::new();
         let _g = EnvGuard::new(
