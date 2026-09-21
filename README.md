@@ -139,6 +139,10 @@ after. No other variable is touched.
 - `herdr-estate fresh [<address>]`: retire the latest conversation and
   start a new one in the same space; closes the campaign's existing
   workspace first, but only once a live check confirms it's still ours.
+  If that close cannot be confirmed, the verb stops instead of creating
+  a second workspace under the same address. If more than one workspace
+  already carries the address, both verbs refuse and name them for you
+  to close by hand.
 - `herdr-estate list`: list every campaign the estate table knows.
 - `--dry-run` on `resume`/`fresh` prints the exact herdr commands and
   agent argv that would run and exits 0 without calling herdr; it

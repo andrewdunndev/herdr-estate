@@ -1188,6 +1188,44 @@ mod tests {
         assert_eq!(f.fake.call_count(), 2); // the dry run confirms the same way
     }
 
+    // --- more than one workspace already carries the label: both verbs
+    // refuse rather than acting on the first row found.
+
+    #[test]
+    fn fresh_refuses_when_two_workspaces_already_carry_the_label() {
+        let f = make_fixture("claude");
+        // The first row is ours and not alive — today's `.find()` would
+        // close and recreate over it, invisible to the second row.
+        ownership::record("home/garden", "w1").unwrap();
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown"},
+                {"workspace_id": "w2", "label": "home/garden", "agent_status": "unknown"}
+            ]}}"#,
+            0,
+        );
+        let err = fresh(&f.estates, "home/garden", false).unwrap_err();
+        assert!(matches!(err, EstateError::Guard(msg) if msg.contains("w1") && msg.contains("w2")));
+        assert_eq!(f.fake.call_count(), 1); // only the list — nothing closed, nothing created
+    }
+
+    #[test]
+    fn fresh_dry_run_refuses_when_two_workspaces_already_carry_the_label() {
+        let f = make_fixture("claude");
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown"},
+                {"workspace_id": "w2", "label": "home/garden", "agent_status": "unknown"}
+            ]}}"#,
+            0,
+        );
+        let err = fresh(&f.estates, "home/garden", true).unwrap_err();
+        assert!(matches!(err, EstateError::Guard(msg) if msg.contains("w1") && msg.contains("w2")));
+        assert_eq!(f.fake.call_count(), 1);
+    }
+
     // --- kind-gated guards: the two Claude-only checks run only when
     // campaign.kind == claude. A non-claude campaign with no ~/.claude
     // state at all would fail those checks if they ran, so a plain

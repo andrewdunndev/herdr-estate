@@ -17,7 +17,12 @@
 //! the verb, never a silent "no workspace, carry on". Every call also
 //! prunes `ownership`'s record to the workspace ids this listing still
 //! reports, since this is the one place the full listing is already in
-//! hand.
+//! hand. Every row carrying the address is collected, not just the
+//! first: herdr's ids are reused across a server restart, so a second
+//! workspace under the same label is a real possibility, and picking one
+//! row over the other would hide it from both the alive guard and the
+//! ownership guard. More than one match raises `GuardError` naming every
+//! id found, before either guard runs on any of them.
 //!
 //! `workspace_alive` reads `agent_status` off the row `live_workspace`
 //! already fetched — no separate `agent list` call. "working", "idle"
@@ -102,7 +107,10 @@ pub fn transcript_exists(conversation_id: &str) -> bool {
     }
 }
 
-/// The workspace herdr already has open under `address`, if any.
+/// The workspace herdr already has open under `address`, if any. Errs
+/// when more than one row carries it: nothing here is safe to pick over
+/// the other, so this stops the verb rather than silently acting on
+/// whichever row happened to come first.
 pub fn live_workspace(address: &str) -> Result<Option<Workspace>, EstateError> {
     let result = herdrcli::call_herdr(&["workspace".to_string(), "list".to_string()], true)?;
     let list: WorkspaceListResult = serde_json::from_value(result.data).map_err(|_| {
@@ -115,7 +123,21 @@ pub fn live_workspace(address: &str) -> Result<Option<Workspace>, EstateError> {
         .collect();
     ownership::prune(&existing_ids)
         .map_err(|e| EstateError::Config(format!("could not update the ownership record: {e}")))?;
-    Ok(list.workspaces.into_iter().find(|w| w.label == address))
+    let mut matching: Vec<Workspace> = list
+        .workspaces
+        .into_iter()
+        .filter(|w| w.label == address)
+        .collect();
+    if matching.len() > 1 {
+        let mut ids: Vec<&str> = matching.iter().map(|w| w.workspace_id.as_str()).collect();
+        ids.sort_unstable();
+        return Err(EstateError::Guard(format!(
+            "{address}: {} workspaces already carry this label ({}) — close the extras yourself",
+            matching.len(),
+            ids.join(", ")
+        )));
+    }
+    Ok(matching.pop())
 }
 
 /// Fail closed: anything other than exactly "unknown" counts as alive,
@@ -298,6 +320,46 @@ mod tests {
         let (_state, _g) = isolated_state(fake.bin_path().to_str().unwrap());
         let err = live_workspace("home/garden").unwrap_err();
         assert!(matches!(err, EstateError::Protocol(_)));
+    }
+
+    #[test]
+    fn duplicate_label_rows_raise_a_guard_error_naming_both_ids() {
+        let fake = FakeHerdr::new();
+        fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown"},
+                {"workspace_id": "w2", "label": "home/garden", "agent_status": "unknown"}
+            ]}}"#,
+            0,
+        );
+        let (_state, _g) = isolated_state(fake.bin_path().to_str().unwrap());
+        let err = live_workspace("home/garden").unwrap_err();
+        match err {
+            EstateError::Guard(msg) => {
+                assert!(msg.contains("w1"), "{msg}");
+                assert!(msg.contains("w2"), "{msg}");
+            }
+            other => panic!("expected a guard error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn duplicate_label_rows_raise_even_when_one_is_alive() {
+        let fake = FakeHerdr::new();
+        fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown"},
+                {"workspace_id": "w2", "label": "home/garden", "agent_status": "working"}
+            ]}}"#,
+            0,
+        );
+        let (_state, _g) = isolated_state(fake.bin_path().to_str().unwrap());
+        assert!(matches!(
+            live_workspace("home/garden"),
+            Err(EstateError::Guard(_))
+        ));
     }
 
     #[test]
