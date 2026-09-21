@@ -397,14 +397,33 @@ fn dry_run_plan(
     Ok(0)
 }
 
+/// What a non-dry-run `resume`/`fresh` produced: the exit code the CLI
+/// prints and returns, plus the workspace id it opened (`None` on a dry
+/// run, which opens nothing). `pub(crate)`: the picker's `dispatch`
+/// reads `workspace_id` to focus the workspace these verbs just opened,
+/// through the exact same guarded call — never a second, parallel path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VerbResult {
+    pub exit_code: i32,
+    pub workspace_id: Option<String>,
+}
+
 pub fn resume(estates: &toml::Table, address: &str, dry_run: bool) -> Result<i32, EstateError> {
+    resume_with_ids(estates, address, dry_run).map(|r| r.exit_code)
+}
+
+pub(crate) fn resume_with_ids(
+    estates: &toml::Table,
+    address: &str,
+    dry_run: bool,
+) -> Result<VerbResult, EstateError> {
     let campaign = campaign::resolve(estates, address, dry_run)?;
     let conversation_id = continuity::latest_conversation(&campaign.dir);
     let conversation_id = match conversation_id {
         Some(id) => id,
         None => {
             println!("{address}: no recorded conversation — resume behaves as fresh");
-            return fresh(estates, address, dry_run);
+            return fresh_with_ids(estates, address, dry_run);
         }
     };
 
@@ -429,12 +448,16 @@ pub fn resume(estates: &toml::Table, address: &str, dry_run: bool) -> Result<i32
     let ws = check_live_workspace(address)?;
 
     if dry_run {
-        return dry_run_plan(
+        let exit_code = dry_run_plan(
             address,
             ws.as_ref(),
             &create_args(&campaign, true),
             &start_cmd,
-        );
+        )?;
+        return Ok(VerbResult {
+            exit_code,
+            workspace_id: None,
+        });
     }
 
     let (workspace_id, pane_id) = open_workspace(&campaign, address, ws, &create_cmd, &agent_argv)?;
@@ -442,10 +465,21 @@ pub fn resume(estates: &toml::Table, address: &str, dry_run: bool) -> Result<i32
         "live  {address}  {workspace_id}  {pane_id}  [{}...]",
         short(&conversation_id)
     );
-    Ok(0)
+    Ok(VerbResult {
+        exit_code: 0,
+        workspace_id: Some(workspace_id),
+    })
 }
 
 pub fn fresh(estates: &toml::Table, address: &str, dry_run: bool) -> Result<i32, EstateError> {
+    fresh_with_ids(estates, address, dry_run).map(|r| r.exit_code)
+}
+
+pub(crate) fn fresh_with_ids(
+    estates: &toml::Table,
+    address: &str,
+    dry_run: bool,
+) -> Result<VerbResult, EstateError> {
     let campaign = campaign::resolve(estates, address, dry_run)?;
     let old_id = continuity::latest_conversation(&campaign.dir);
     if let Some(old_id) = &old_id {
@@ -466,12 +500,16 @@ pub fn fresh(estates: &toml::Table, address: &str, dry_run: bool) -> Result<i32,
     let ws = check_live_workspace(address)?;
 
     if dry_run {
-        return dry_run_plan(
+        let exit_code = dry_run_plan(
             address,
             ws.as_ref(),
             &create_args(&campaign, true),
             &start_cmd,
-        );
+        )?;
+        return Ok(VerbResult {
+            exit_code,
+            workspace_id: None,
+        });
     }
 
     let (workspace_id, pane_id) = open_workspace(&campaign, address, ws, &create_cmd, &agent_argv)?;
@@ -481,7 +519,10 @@ pub fn fresh(estates: &toml::Table, address: &str, dry_run: bool) -> Result<i32,
         "live  {address}  {workspace_id}  {pane_id}  [{}...]  (fresh)",
         short(&new_id)
     );
-    Ok(0)
+    Ok(VerbResult {
+        exit_code: 0,
+        workspace_id: Some(workspace_id),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
