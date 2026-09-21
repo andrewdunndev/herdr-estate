@@ -1,0 +1,13 @@
+# Node 1: standard library only, no build step — one job, a public
+# python:3-slim image tag (not the estate's ci-* catalog image, which
+# has no Python component yet; see .deviations.yaml).
+stages:
+  - test
+
+test:
+  stage: test
+  image: python:3-slim
+  variables:
+    PYTHONPATH: src
+  script:
+    - python3 -m unittest discover -s tests

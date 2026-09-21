@@ -116,3 +116,13 @@ bin/herdr-estate fresh home/garden --dry-run
 # would start:
 #   herdr agent start home-garden --kind claude --pane <PANE_ID> ...
 ```
+
+## Tests
+
+Standard library only, `unittest`, mocking the one herdr-call boundary
+(`herdr_estate.herdrcli.call_herdr`) and using temp directories for
+every filesystem-touching test:
+
+```sh
+PYTHONPATH=src python3 -m unittest discover -s tests
+```
