@@ -656,6 +656,43 @@ mod tests {
             .is_alphabetic());
     }
 
+    // --- byte classifiers and shlex quoting ---
+
+    #[test]
+    fn is_agent_name_byte_accepts_underscore() {
+        assert!(is_agent_name_byte('_'));
+    }
+
+    #[test]
+    fn is_agent_name_byte_accepts_hyphen() {
+        assert!(is_agent_name_byte('-'));
+    }
+
+    #[test]
+    fn is_agent_name_byte_rejects_a_slash() {
+        assert!(!is_agent_name_byte('/'));
+    }
+
+    #[test]
+    fn shlex_quote_wraps_a_value_containing_a_space() {
+        // A space is not in the safe charset; an unescaped one in a
+        // `--dry-run` plan would let one argv element read as two.
+        let quoted = shlex_quote("two words");
+        assert_eq!(quoted, "'two words'");
+    }
+
+    #[test]
+    fn shlex_quote_escapes_an_embedded_single_quote() {
+        let quoted = shlex_quote("it's");
+        assert_eq!(quoted, r#"'it'"'"'s'"#);
+    }
+
+    #[test]
+    fn shlex_quote_leaves_a_safe_value_unquoted() {
+        let quoted = shlex_quote("home/garden-1_2.3:4=5@6%7+8,9");
+        assert_eq!(quoted, "home/garden-1_2.3:4=5@6%7+8,9");
+    }
+
     // --- command shapes ---
 
     #[test]
