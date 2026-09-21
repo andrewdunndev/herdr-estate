@@ -83,12 +83,40 @@ fn run_interactive(built_rows: Vec<core::Row>) -> Result<Outcome, EstateError> {
         }
     };
     let _guard = RestoreGuard::new();
-    event_loop(&mut terminal, AppState::new(built_rows))
+    event_loop(
+        &mut terminal,
+        AppState::new(built_rows),
+        &mut CrosstermEvents,
+    )
 }
 
-fn event_loop(
-    terminal: &mut ratatui::DefaultTerminal,
+/// Where `event_loop` gets its input from — real crossterm in
+/// production, a scripted sequence in a test. Abstracting this (rather
+/// than `event_loop` calling `crossterm::event::poll`/`read` directly)
+/// is what lets a test drive the loop's resize-continue branch, its
+/// no-event-continue branch and its key-event arm without a real
+/// terminal: nothing could reach any of them before this seam existed.
+trait EventSource {
+    fn poll(&mut self, timeout: Duration) -> std::io::Result<bool>;
+    fn read(&mut self) -> std::io::Result<TermEvent>;
+}
+
+struct CrosstermEvents;
+
+impl EventSource for CrosstermEvents {
+    fn poll(&mut self, timeout: Duration) -> std::io::Result<bool> {
+        event::poll(timeout)
+    }
+
+    fn read(&mut self) -> std::io::Result<TermEvent> {
+        event::read()
+    }
+}
+
+fn event_loop<B: ratatui::backend::Backend>(
+    terminal: &mut ratatui::Terminal<B>,
     mut state: AppState,
+    events: &mut impl EventSource,
 ) -> Result<Outcome, EstateError> {
     loop {
         terminal
@@ -107,13 +135,15 @@ fn event_loop(
 
         // Poll so a resize or quiet terminal can't block here forever;
         // a real interactive session blocks on the next key as normal.
-        let has_event = event::poll(Duration::from_millis(250))
+        let has_event = events
+            .poll(Duration::from_millis(250))
             .map_err(|e| EstateError::Protocol(format!("could not poll for input: {e}")))?;
         if !has_event {
             continue;
         }
 
-        match event::read()
+        match events
+            .read()
             .map_err(|e| EstateError::Protocol(format!("could not read input: {e}")))?
         {
             TermEvent::Resize(_, _) => continue,
@@ -153,6 +183,121 @@ fn translate_key(key: KeyEvent) -> Option<CoreEvent> {
         KeyCode::Enter => Some(CoreEvent::Enter),
         KeyCode::Esc => Some(CoreEvent::Esc),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod event_loop_tests {
+    use super::*;
+    use crate::picker::core::{Row, RowState};
+    use ratatui::backend::TestBackend;
+    use std::collections::VecDeque;
+
+    /// A scripted `EventSource`: `NoEvent` makes one `poll` return
+    /// `Ok(false)` (the quiet-terminal branch); `Event` makes `poll`
+    /// return `Ok(true)` and the next `read` return it. A script that
+    /// runs out without the loop having reached `state.done` panics
+    /// rather than spinning forever.
+    enum Scripted {
+        NoEvent,
+        Event(TermEvent),
+    }
+
+    struct ScriptedEvents(VecDeque<Scripted>);
+
+    impl ScriptedEvents {
+        fn new(script: Vec<Scripted>) -> Self {
+            ScriptedEvents(script.into())
+        }
+    }
+
+    impl EventSource for ScriptedEvents {
+        fn poll(&mut self, _timeout: Duration) -> std::io::Result<bool> {
+            match self.0.front() {
+                Some(Scripted::Event(_)) => Ok(true),
+                Some(Scripted::NoEvent) => {
+                    self.0.pop_front();
+                    Ok(false)
+                }
+                None => panic!("event_loop polled past the end of the script"),
+            }
+        }
+
+        fn read(&mut self) -> std::io::Result<TermEvent> {
+            match self.0.pop_front() {
+                Some(Scripted::Event(e)) => Ok(e),
+                other => panic!("event_loop read with no scripted event: {other:?}"),
+            }
+        }
+    }
+
+    impl std::fmt::Debug for Scripted {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Scripted::NoEvent => write!(f, "NoEvent"),
+                Scripted::Event(e) => write!(f, "Event({e:?})"),
+            }
+        }
+    }
+
+    fn key_press(code: KeyCode) -> TermEvent {
+        TermEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    fn one_row() -> Vec<Row> {
+        vec![Row {
+            address: "home/garden".to_string(),
+            state: RowState::New,
+        }]
+    }
+
+    fn test_terminal() -> ratatui::Terminal<TestBackend> {
+        ratatui::Terminal::new(TestBackend::new(40, 10)).unwrap()
+    }
+
+    #[test]
+    fn a_quiet_poll_continues_the_loop_instead_of_reading() {
+        // If the `!has_event` guard were deleted, this would call
+        // `read()` with nothing scripted for it and panic.
+        let mut terminal = test_terminal();
+        let mut events = ScriptedEvents::new(vec![
+            Scripted::NoEvent,
+            Scripted::NoEvent,
+            Scripted::Event(key_press(KeyCode::Esc)),
+        ]);
+        let outcome = event_loop(&mut terminal, AppState::new(one_row()), &mut events).unwrap();
+        assert_eq!(outcome, Outcome::Cancelled);
+    }
+
+    #[test]
+    fn a_resize_event_continues_the_loop_instead_of_acting_on_it() {
+        // If the resize arm's `continue` were deleted (falling through
+        // to the `_ => {}` arm instead), the loop would still continue
+        // — but it would then also miss `state.done` being unset and
+        // loop with no event consumed. This pins the observable
+        // behaviour: a resize changes nothing and the next scripted key
+        // still decides the outcome.
+        let mut terminal = test_terminal();
+        let mut events = ScriptedEvents::new(vec![
+            Scripted::Event(TermEvent::Resize(80, 24)),
+            Scripted::Event(key_press(KeyCode::Esc)),
+        ]);
+        let outcome = event_loop(&mut terminal, AppState::new(one_row()), &mut events).unwrap();
+        assert_eq!(outcome, Outcome::Cancelled);
+    }
+
+    #[test]
+    fn a_key_event_reaches_core_update_and_can_select_a_row() {
+        let mut terminal = test_terminal();
+        let mut events = ScriptedEvents::new(vec![Scripted::Event(key_press(KeyCode::Enter))]);
+        let outcome = event_loop(&mut terminal, AppState::new(one_row()), &mut events).unwrap();
+        assert_eq!(
+            outcome,
+            Outcome::Selected(Row {
+                address: "home/garden".to_string(),
+                state: RowState::New,
+            })
+        );
     }
 }
 
