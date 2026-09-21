@@ -95,6 +95,20 @@ impl<'de> Deserialize<'de> for AgentStatus {
     }
 }
 
+impl AgentStatus {
+    /// The wire value this variant round-trips from, for display (the
+    /// picker's row list shows this next to a live campaign).
+    pub fn as_str(&self) -> &str {
+        match self {
+            AgentStatus::Working => "working",
+            AgentStatus::Idle => "idle",
+            AgentStatus::Done => "done",
+            AgentStatus::Unknown => "unknown",
+            AgentStatus::Other(s) => s,
+        }
+    }
+}
+
 /// One row of `workspace list`'s `workspaces` array. `workspace_id` and
 /// `label` are exactly the fields the ownership and alive guards depend
 /// on, so neither carries `#[serde(default)]`: a row herdr sent without
@@ -225,6 +239,20 @@ pub fn call_herdr(args: &[String], check: bool) -> Result<HerdrResult, EstateErr
         data,
         stderr,
     })
+}
+
+/// Every workspace herdr currently has open, via `workspace list`. A
+/// non-zero exit (`call_herdr`'s `check: true`) or a response that
+/// doesn't parse into a `workspaces` array both raise `ProtocolError` —
+/// callers (the ownership/alive guards, the picker's row list) must
+/// never treat that as "no workspaces" and carry on over a half-true
+/// read.
+pub fn workspace_list() -> Result<Vec<Workspace>, EstateError> {
+    let result = call_herdr(&["workspace".to_string(), "list".to_string()], true)?;
+    let list: WorkspaceListResult = serde_json::from_value(result.data).map_err(|_| {
+        EstateError::Protocol("workspace list: response carried no 'workspaces' array".to_string())
+    })?;
+    Ok(list.workspaces)
 }
 
 #[cfg(test)]

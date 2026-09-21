@@ -34,7 +34,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::errors::EstateError;
-use crate::herdrcli::{self, AgentStatus, Workspace, WorkspaceListResult};
+use crate::herdrcli::{self, AgentStatus, Workspace};
 use crate::ownership;
 use crate::paths::home_dir;
 
@@ -112,19 +112,12 @@ pub fn transcript_exists(conversation_id: &str) -> bool {
 /// the other, so this stops the verb rather than silently acting on
 /// whichever row happened to come first.
 pub fn live_workspace(address: &str) -> Result<Option<Workspace>, EstateError> {
-    let result = herdrcli::call_herdr(&["workspace".to_string(), "list".to_string()], true)?;
-    let list: WorkspaceListResult = serde_json::from_value(result.data).map_err(|_| {
-        EstateError::Protocol("workspace list: response carried no 'workspaces' array".to_string())
-    })?;
-    let existing_ids: BTreeSet<String> = list
-        .workspaces
-        .iter()
-        .map(|w| w.workspace_id.clone())
-        .collect();
+    let workspaces = herdrcli::workspace_list()?;
+    let existing_ids: BTreeSet<String> =
+        workspaces.iter().map(|w| w.workspace_id.clone()).collect();
     ownership::prune(&existing_ids)
         .map_err(|e| EstateError::Config(format!("could not update the ownership record: {e}")))?;
-    let mut matching: Vec<Workspace> = list
-        .workspaces
+    let mut matching: Vec<Workspace> = workspaces
         .into_iter()
         .filter(|w| w.label == address)
         .collect();
