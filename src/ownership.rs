@@ -212,6 +212,35 @@ mod tests {
     }
 
     #[test]
+    fn temp_suffix_is_unique_under_concurrent_calls() {
+        // The atomic-write temp filename's uniqueness rests entirely on
+        // this. A constant-replacement mutant would make every thread
+        // collide on the same tmp path.
+        use std::collections::HashSet;
+        use std::sync::{Arc, Mutex};
+        let results = Arc::new(Mutex::new(Vec::new()));
+        let handles: Vec<_> = (0..50)
+            .map(|_| {
+                let results = Arc::clone(&results);
+                std::thread::spawn(move || {
+                    let s = temp_suffix();
+                    results.lock().unwrap().push(s);
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let values = results.lock().unwrap();
+        let unique: HashSet<&String> = values.iter().collect();
+        assert_eq!(
+            unique.len(),
+            values.len(),
+            "duplicate temp_suffix values: {values:?}"
+        );
+    }
+
+    #[test]
     fn write_leaves_no_temp_file_behind() {
         let (d, _g) = isolated();
         record("home/garden", "w1").unwrap();
