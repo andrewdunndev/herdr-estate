@@ -1,13 +1,20 @@
-# Standard library only, no build step — one job, a public python:3-slim
-# image tag (no shared CI component offers a Python job yet; see
-# .deviations.yaml).
-stages:
-  - test
+default:
+  interruptible: true
 
-test:
-  stage: test
-  image: python:3-slim
-  variables:
-    PYTHONPATH: src
-  script:
-    - python3 -m unittest discover -s tests
+workflow:
+  auto_cancel:
+    on_new_commit: interruptible
+
+stages:
+  - lint
+  - build
+
+include:
+  # cargo fmt --check + cargo clippy -D warnings via the catalog's
+  # pinned ci-rust image.
+  - component: gitlab.com/dunn.dev/pipeline/rust-lint@4.6.0
+
+  # cargo build + cargo test on every push and merge request.
+  - component: gitlab.com/dunn.dev/pipeline/rust-build@4.6.0
+    inputs:
+      package_path: .

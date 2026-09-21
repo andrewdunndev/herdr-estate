@@ -1,6 +1,5 @@
 # Format: reference.dunn.dev/deviations/. See README.md's brand-artifact
-# note and .gitlab-ci.yml's comment for the two decisions these entries
-# record.
+# note for the decision these entries record.
 
 - standard: repository
   assertion: file-exists:avatar.svg
@@ -44,14 +43,4 @@
     outranks this project-level flag — see repository/CONTRACT.md's
     Deviations section. The group cascade reads true; the project flag
     reads false.
-  owner: andrew@dunn.dev
-
-- standard: pipeline
-  assertion: file-contains:.gitlab-ci.yml
-  reason: |
-    No shared CI component catalog offers a Python job yet. This repo's
-    CI is a single plain job on a public python:3-slim image tag
-    running the test suite; adopt a shared component once one exists,
-    or once this repo has enough CI surface (lint, build) to justify
-    reference-check alongside it.
   owner: andrew@dunn.dev
