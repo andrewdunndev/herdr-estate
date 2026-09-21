@@ -8,12 +8,12 @@ herdr-estate is a plugin for the [herdr](https://herdr.dev) terminal
 workspace manager. It gives herdr *estates* and *campaigns*: durable
 threads of agent work, addressed as `estate/campaign`, that resume
 where they left off instead of starting cold every time. The plugin
-owns exactly two files — an estate table and a per-campaign frontmatter
-block — plus a continuity log it reads and writes itself; herdr's own
+owns exactly two files, an estate table and a per-campaign frontmatter
+block, plus a continuity log it reads and writes itself; herdr's own
 resume is never used.
 
 Brand artifacts (`avatar.svg`, `hero.svg`, `favicon.svg`, `brand.png`)
-are deferred to this repo's pre-public sweep — see `.deviations.yaml`.
+are deferred to this repo's pre-public sweep; see `.deviations.yaml`.
 
 ## Install
 
@@ -75,7 +75,7 @@ adapter starts with no mapped flags and prints one warning line. See
 plugin uses and what each one means.
 
 Continuity itself lives in `campaigns/<name>/sessions.log`: one line
-per conversation — an ISO-8601 UTC timestamp, the hostname that opened
+per conversation, an ISO-8601 UTC timestamp, the hostname that opened
 it, and the conversation id, space-separated. `resume` reads the last
 line; `fresh` appends a new one. A campaign with no recorded
 conversation resumes as fresh, and says so.
@@ -93,19 +93,19 @@ worktree:
 
 `resume` and `fresh` ensure the worktree exists, use it as the
 workspace cwd, and add it to the agent's paths. This plugin never
-removes a worktree — herdr's own `worktree remove --force` deletes
+removes a worktree: herdr's own `worktree remove --force` deletes
 uncommitted work, and removal stays a human act. It uses plain git, not
 `herdr worktree`, because that family takes no `--env` (the address
 could not be exported) and registers a stray base workspace.
 
 ## The verbs
 
-- `herdr-estate resume [<address>]` — continue the campaign's latest
+- `herdr-estate resume [<address>]`: continue the campaign's latest
   conversation in a new workspace.
-- `herdr-estate fresh [<address>]` — retire the latest conversation and
+- `herdr-estate fresh [<address>]`: retire the latest conversation and
   start a new one in the same space; closes the campaign's existing
   workspace first, but only once a live check confirms it's still ours.
-- `herdr-estate list` — list every campaign the estate table knows.
+- `herdr-estate list`: list every campaign the estate table knows.
 - `--dry-run` on `resume`/`fresh` prints the exact herdr commands and
   agent argv that would run and exits 0 without calling herdr; it
   requires an explicit `<address>`, since deriving one from the current
