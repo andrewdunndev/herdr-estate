@@ -152,6 +152,46 @@ after. No other variable is touched.
 `<address>` is `estate/campaign`. Run as a herdr plugin action with no
 address, it's derived from the current workspace's label.
 
+## Picker
+
+`herdr-estate pick` lists every campaign of every estate the table
+knows, one row per address, in a small terminal UI:
+
+- **live**: a workspace currently carries the address; its agent status
+  (working, idle, done or unknown) shows next to it.
+- **dormant**: no live workspace, but `sessions.log` records a
+  conversation; the date of its last line shows next to it.
+- **new**: neither.
+
+Rows sort live first, then dormant by most recent, then new. Type to
+filter by substring on the address; up/down or ctrl-p/ctrl-n move the
+selection; Esc or ctrl-c quits without doing anything. Enter acts on the
+selected row through the same `resume`/`fresh` verbs above, so every
+guard they enforce applies here too: live focuses the existing
+workspace, dormant resumes the campaign and then focuses the workspace
+it opens, new does the same through `fresh`. When the filter matches
+nothing, the picker shows "no match" and Enter does nothing.
+
+Open it as a popup over the active pane:
+
+```sh
+herdr plugin pane open --plugin herdr-estate --entrypoint picker
+```
+
+or bind a key to the `pick` action in your own
+`~/.config/herdr/config.toml`, the same way `resume`/`fresh` are bound
+above:
+
+```toml
+[[keys.command]]
+key = "prefix+p"
+type = "plugin_action"
+command = "herdr-estate.pick"
+```
+
+`herdr-estate pick --render-once --width <W> --height <H>` prints a
+single frame as plain text, with no terminal needed (defaults to 80x20).
+
 ## Worked example
 
 Using the invented names in [`examples/`](examples/):

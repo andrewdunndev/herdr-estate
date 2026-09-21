@@ -25,3 +25,17 @@ id = "list"
 title = "List"
 contexts = ["workspace"]
 command = ["target/release/herdr-estate", "list"]
+
+[[actions]]
+id = "pick"
+title = "Pick"
+contexts = ["workspace"]
+command = ["target/release/herdr-estate", "pick"]
+
+[[panes]]
+id = "picker"
+title = "Campaigns"
+placement = "popup"
+width = 80
+height = 20
+command = ["target/release/herdr-estate", "pick"]
