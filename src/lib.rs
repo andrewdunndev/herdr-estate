@@ -6,6 +6,7 @@ pub mod errors;
 pub mod frontmatter;
 pub mod paths;
 pub mod verb;
+pub mod worktree;
 
 /// Test-only support for the tests scattered across this crate's modules
 /// that read or write process environment variables. `std::env` is
