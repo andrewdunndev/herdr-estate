@@ -1,0 +1,19 @@
+[package]
+name = "herdr-estate"
+version = "0.1.0"
+edition = "2021"
+description = "Durable campaigns for herdr: resume a campaign's latest conversation or start fresh, addressed by estate/campaign."
+license = "MIT"
+
+[lib]
+name = "herdr_estate"
+path = "src/lib.rs"
+
+[[bin]]
+name = "herdr-estate"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
