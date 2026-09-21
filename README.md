@@ -49,14 +49,25 @@ shell invocation. One `[estate.<name>]` table per estate:
 root = "~/estates/home"        # the repo that holds the campaigns
 campaigns = "campaigns"        # directory under root
 agent = "claude"               # default herdr agent kind
+paths = ["~/code"]             # extra directories, added before each campaign's own
 prompts = ["prompts/base.md"]  # appended to every agent
 env = { }                      # exported into every workspace
+
+[estate.home.claude]
+remote-control = true          # default for every campaign in this estate
 ```
 
 A relative `prompts` entry resolves against the estate's `root`, not the
 directory herdr-estate happens to run from; `~` and `$VAR` expand
 first, so an absolute or `~`-prefixed entry is unaffected. See
 [`examples/estates.toml`](examples/estates.toml).
+
+An estate's `paths` list is added ahead of each campaign's own list,
+with a path repeated in both (after expansion) kept once; a
+`[estate.<name>.<kind>]` table such as `[estate.home.claude]` sets
+per-kind defaults for the whole estate that a campaign's own `claude:`
+table overrides key by key, including turning a default off with an
+explicit `false`.
 
 **The campaign file**, `campaigns/<name>/campaign.md`, carries YAML
 frontmatter: generic keys plus one table per agent kind for flags only

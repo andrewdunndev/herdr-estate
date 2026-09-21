@@ -55,10 +55,29 @@ def resolve(estates: dict[str, dict], address: str, *, dry_run: bool = False) ->
         ep = expand(p)
         return ep if ep.is_absolute() else root / ep
 
-    add_dirs = [_rooted(p) for p in fm.get("paths", []) if isinstance(p, str) and p]
+    def _paths(source: dict) -> list[Path]:
+        return [_rooted(p) for p in source.get("paths", []) if isinstance(p, str) and p]
+
+    # The estate's paths are defaults: they lead, the campaign's own
+    # paths follow, and a path repeated in both (post-expansion) is
+    # kept once, at its first position.
+    add_dirs: list[Path] = []
+    for p in _paths(row) + _paths(fm):
+        if p not in add_dirs:
+            add_dirs.append(p)
+
     prompt_files = [_rooted(p) for p in row.get("prompts", [])]
-    raw_flags = fm.get(kind)
-    kind_flags = raw_flags if isinstance(raw_flags, dict) else {}
+
+    # Same defaulting for a per-kind table: the estate's `[estate.<name>.<kind>]`
+    # entries apply to every campaign in the estate, and the campaign's own
+    # `<kind>:` table overrides key by key (an explicit `false` there turns
+    # an estate default off).
+    estate_flags = row.get(kind)
+    campaign_flags = fm.get(kind)
+    kind_flags = {
+        **(estate_flags if isinstance(estate_flags, dict) else {}),
+        **(campaign_flags if isinstance(campaign_flags, dict) else {}),
+    }
 
     # A campaign with no `worktree` key runs in the estate's plain
     # directory. With one, resume/fresh ensure it exists, use it as the

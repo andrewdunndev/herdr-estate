@@ -2,8 +2,14 @@
 root = "~/estates/home"        # the repo that holds the campaigns
 campaigns = "campaigns"        # directory under root
 agent = "claude"               # default herdr agent kind
+paths = ["~/code"]             # extra directories, added before each campaign's own
 prompts = ["prompts/base.md"]  # appended to every agent
 env = { }                      # exported into every workspace
+
+[estate.home.claude]
+remote-control = true          # default for every campaign in this estate;
+                                # a campaign's own claude: table can override
+                                # or turn off with false
 
 # Copy the block above into $HERDR_PLUGIN_CONFIG_DIR/estates.toml (or
 # ~/.config/herdr-estate/estates.toml for a bare-shell invocation), point

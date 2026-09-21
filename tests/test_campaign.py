@@ -90,6 +90,61 @@ class ResolveCampaign(unittest.TestCase):
             ensure.assert_not_called()
             self.assertEqual(c.workdir, root)
 
+    def test_estate_paths_precede_campaign_paths(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "home"
+            _make_estate(root, "garden", "---\npaths: [/b]\n---\n")
+            estates = {"home": {"root": str(root), "paths": ["/a"]}}
+            c = resolve(estates, "home/garden")
+            self.assertEqual([str(p) for p in c.add_dirs], ["/a", "/b"])
+
+    def test_duplicate_estate_and_campaign_path_collapses(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "home"
+            _make_estate(root, "garden", "---\npaths: [~/code, /b]\n---\n")
+            estates = {"home": {"root": str(root), "paths": ["~/code"]}}
+            c = resolve(estates, "home/garden")
+            self.assertEqual([str(p) for p in c.add_dirs],
+                              [str(Path.home() / "code"), "/b"])
+
+    def test_estate_kind_default_appears_in_flags(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "home"
+            _make_estate(root, "garden")
+            estates = {"home": {"root": str(root),
+                                 "claude": {"remote-control": True}}}
+            c = resolve(estates, "home/garden")
+            self.assertEqual(c.kind_flags, {"remote-control": True})
+
+    def test_campaign_kind_flag_overrides_estate_default(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "home"
+            _make_estate(root, "garden",
+                         "---\nclaude:\n  mcp-config: campaign.json\n---\n")
+            estates = {"home": {"root": str(root),
+                                 "claude": {"mcp-config": "estate.json"}}}
+            c = resolve(estates, "home/garden")
+            self.assertEqual(c.kind_flags, {"mcp-config": "campaign.json"})
+
+    def test_campaign_false_turns_off_estate_kind_default(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "home"
+            _make_estate(root, "garden",
+                         "---\nclaude:\n  remote-control: false\n---\n")
+            estates = {"home": {"root": str(root),
+                                 "claude": {"remote-control": True}}}
+            c = resolve(estates, "home/garden")
+            self.assertEqual(c.kind_flags, {"remote-control": False})
+
+    def test_estate_with_neither_key_matches_prior_behavior(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "home"
+            _make_estate(root, "garden")
+            estates = {"home": {"root": str(root), "agent": "claude"}}
+            c = resolve(estates, "home/garden")
+            self.assertEqual(c.add_dirs, [])
+            self.assertEqual(c.kind_flags, {})
+
     def test_worktree_key_ensures_and_becomes_workdir(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d) / "home"
