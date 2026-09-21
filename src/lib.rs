@@ -1,6 +1,7 @@
 //! herdr-estate: durable campaigns for herdr. See `docs/vocabulary.md` for
 //! the six words this crate uses in their one defined sense.
 
+pub mod config;
 pub mod errors;
 pub mod frontmatter;
 pub mod paths;
@@ -61,6 +62,47 @@ pub(crate) mod test_support {
                     None => std::env::remove_var(&k),
                 }
             }
+        }
+    }
+
+    /// A fresh, empty directory under the OS temp dir, removed when the
+    /// guard drops. Stands in for the `tempfile` crate, which is outside
+    /// this crate's dependency budget.
+    pub struct TempDir {
+        path: std::path::PathBuf,
+    }
+
+    impl TempDir {
+        pub fn new() -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let path = std::env::temp_dir().join(format!(
+                "herdr-estate-test-{}-{n}-{nanos}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).expect("create temp dir for test");
+            TempDir { path }
+        }
+
+        pub fn path(&self) -> &std::path::Path {
+            &self.path
+        }
+    }
+
+    impl Default for TempDir {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
         }
     }
 }
