@@ -5,8 +5,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from herdr_estate import ownership
 from herdr_estate.doubleopen import (live_workspace, registry_holder,
-                                      transcript_exists, workspace_agent_running)
+                                      transcript_exists, workspace_alive)
+from herdr_estate.errors import ProtocolError
 from herdr_estate.herdrcli import HerdrResult
 
 
@@ -61,43 +63,78 @@ class TranscriptExists(unittest.TestCase):
 
 
 class LiveWorkspace(unittest.TestCase):
-    def test_finds_matching_label(self):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._patch = mock.patch.dict(
+            "os.environ", {"HERDR_PLUGIN_STATE_DIR": self._tmp.name})
+        self._patch.start()
+        self.addCleanup(self._patch.stop)
+
+    def test_finds_matching_label_via_workspace_list(self):
         data = {"workspaces": [{"label": "home/taxes", "workspace_id": "w1"},
                                 {"label": "home/garden", "workspace_id": "w2"}]}
         with mock.patch("herdr_estate.doubleopen.herdrcli.call_herdr") as call:
             call.return_value = HerdrResult(ok=True, returncode=0, data=data)
             ws = live_workspace("home/garden")
         self.assertEqual(ws["workspace_id"], "w2")
+        # exact argv sent to the herdr boundary
+        call.assert_called_once_with(["workspace", "list"])
 
     def test_no_match_is_none(self):
         data = {"workspaces": [{"label": "home/taxes", "workspace_id": "w1"}]}
         with mock.patch("herdr_estate.doubleopen.herdrcli.call_herdr") as call:
             call.return_value = HerdrResult(ok=True, returncode=0, data=data)
             self.assertIsNone(live_workspace("home/garden"))
+        call.assert_called_once_with(["workspace", "list"])
 
-    def test_probe_failure_is_none(self):
+    def test_missing_workspaces_array_raises(self):
+        """A 0 exit whose stdout didn't parse into JSON leaves
+        HerdrResult.data == {} (herdrcli.call_herdr's own behaviour on
+        malformed JSON) — that must stop the verb, not read as zero
+        workspaces."""
         with mock.patch("herdr_estate.doubleopen.herdrcli.call_herdr") as call:
-            call.return_value = HerdrResult(ok=False, returncode=1)
-            self.assertIsNone(live_workspace("home/garden"))
+            call.return_value = HerdrResult(ok=True, returncode=0, data={})
+            with self.assertRaises(ProtocolError):
+                live_workspace("home/garden")
 
-
-class WorkspaceAgentRunning(unittest.TestCase):
-    def test_running_agent_found(self):
-        data = {"agents": [{"workspace_id": "w2"}]}
+    def test_prunes_ownership_records_not_in_the_listing(self):
+        ownership.record("home/gone", "stale-id")
+        ownership.record("home/garden", "w2")
+        data = {"workspaces": [{"label": "home/garden", "workspace_id": "w2",
+                                 "agent_status": "unknown"}]}
         with mock.patch("herdr_estate.doubleopen.herdrcli.call_herdr") as call:
             call.return_value = HerdrResult(ok=True, returncode=0, data=data)
-            self.assertTrue(workspace_agent_running("w2"))
+            live_workspace("home/garden")
+        self.assertFalse(ownership.is_ours("stale-id"))
+        self.assertTrue(ownership.is_ours("w2"))
 
-    def test_no_agent_for_workspace(self):
-        data = {"agents": [{"workspace_id": "w1"}]}
-        with mock.patch("herdr_estate.doubleopen.herdrcli.call_herdr") as call:
-            call.return_value = HerdrResult(ok=True, returncode=0, data=data)
-            self.assertFalse(workspace_agent_running("w2"))
 
-    def test_probe_failure_is_false(self):
-        with mock.patch("herdr_estate.doubleopen.herdrcli.call_herdr") as call:
-            call.return_value = HerdrResult(ok=False, returncode=1)
-            self.assertFalse(workspace_agent_running("w2"))
+class WorkspaceAlive(unittest.TestCase):
+    """Reads agent_status off the row live_workspace already fetched —
+    no separate herdr call. Fails closed: only exactly "unknown" is not
+    alive."""
+
+    def test_unknown_is_not_alive(self):
+        self.assertFalse(workspace_alive({"agent_status": "unknown"}))
+
+    def test_working_is_alive(self):
+        self.assertTrue(workspace_alive({"agent_status": "working"}))
+
+    def test_idle_is_alive(self):
+        self.assertTrue(workspace_alive({"agent_status": "idle"}))
+
+    def test_done_is_alive(self):
+        self.assertTrue(workspace_alive({"agent_status": "done"}))
+
+    def test_missing_key_is_alive(self):
+        self.assertTrue(workspace_alive({}))
+
+    def test_null_value_is_alive(self):
+        self.assertTrue(workspace_alive({"agent_status": None}))
+
+    def test_unrecognised_value_is_alive(self):
+        self.assertTrue(workspace_alive({"agent_status": "something-new"}))
 
 
 if __name__ == "__main__":

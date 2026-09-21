@@ -17,3 +17,9 @@ class UsageError(EstateError):
 
 class GuardError(EstateError):
     """A double-open or label-match guard refused to proceed."""
+
+
+class ProtocolError(EstateError):
+    """A herdr response was missing a field this code depends on, or
+    wasn't shaped the way the herdr CLI boundary is documented to shape
+    it (e.g. `workspace list` without a `workspaces` array)."""

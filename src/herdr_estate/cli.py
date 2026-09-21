@@ -48,7 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
         "address", nargs="?",
         help="estate/campaign; derived from the workspace label when omitted")
     resume_p.add_argument("--dry-run", action="store_true",
-                           help="print the herdr commands and agent argv, run nothing")
+                           help="print the herdr commands and agent argv; "
+                                "create, close or start nothing")
     resume_p.set_defaults(func=cmd_resume)
 
     fresh_p = sub.add_parser(
@@ -57,7 +58,8 @@ def build_parser() -> argparse.ArgumentParser:
         "address", nargs="?",
         help="estate/campaign; derived from the workspace label when omitted")
     fresh_p.add_argument("--dry-run", action="store_true",
-                          help="print the herdr commands and agent argv, run nothing")
+                          help="print the herdr commands and agent argv; "
+                               "create, close or start nothing")
     fresh_p.set_defaults(func=cmd_fresh)
 
     list_p = sub.add_parser("list", help="list every campaign the estate table knows")
