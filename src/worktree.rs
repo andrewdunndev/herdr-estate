@@ -208,6 +208,65 @@ mod tests {
     }
 
     #[test]
+    fn new_branch_is_cut_from_the_real_origin_default_not_main() {
+        // Every other test's repo has no `origin` remote, so
+        // `default_branch`'s `symbolic-ref refs/remotes/origin/HEAD`
+        // always misses and falls back to the literal "main". Here the
+        // remote's default branch is "trunk", named "main" nowhere, and
+        // the local checkout's *current* branch (a local-only "main",
+        // diverged from trunk) carries content trunk never had — so a
+        // new worktree branched from the wrong base would carry the
+        // wrong marker file.
+        let tmp = TempDir::new();
+        let run = |dir: &Path, args: &[&str]| {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        };
+
+        let bare = tmp.path().join("origin.git");
+        run(
+            tmp.path(),
+            &["init", "--bare", "-b", "trunk", bare.to_str().unwrap()],
+        );
+
+        let seed = tmp.path().join("seed");
+        std::fs::create_dir_all(&seed).unwrap();
+        run(&seed, &["init", "-b", "trunk"]);
+        run(&seed, &["config", "user.email", "test@example.com"]);
+        run(&seed, &["config", "user.name", "Test"]);
+        std::fs::write(seed.join("marker-trunk.txt"), "trunk\n").unwrap();
+        run(&seed, &["add", "marker-trunk.txt"]);
+        run(&seed, &["commit", "-m", "init"]);
+        run(&seed, &["remote", "add", "origin", bare.to_str().unwrap()]);
+        run(&seed, &["push", "origin", "trunk"]);
+
+        let repo = tmp.path().join("repo");
+        run(
+            tmp.path(),
+            &["clone", bare.to_str().unwrap(), repo.to_str().unwrap()],
+        );
+        // A local-only branch, diverged from trunk, left checked out —
+        // the wrong base if `default_branch` fell back to its name.
+        run(&repo, &["checkout", "-b", "main"]);
+        run(&repo, &["config", "user.email", "test@example.com"]);
+        run(&repo, &["config", "user.name", "Test"]);
+        std::fs::write(repo.join("marker-main-only.txt"), "main\n").unwrap();
+        run(&repo, &["add", "marker-main-only.txt"]);
+        run(&repo, &["commit", "-m", "local-only"]);
+
+        let state = tmp.path().join("state");
+        let _env = EnvGuard::set(&[("HERDR_PLUGIN_STATE_DIR", state.to_str().unwrap())]);
+        let wt = ensure_worktree(repo.to_str().unwrap(), "wt/derived").unwrap();
+        assert!(wt.join("marker-trunk.txt").is_file());
+        assert!(!wt.join("marker-main-only.txt").exists());
+    }
+
+    #[test]
     fn creates_new_branch_worktree() {
         let f = fixture();
         let wt = ensure_worktree(f.repo.to_str().unwrap(), "wt/site-work").unwrap();
