@@ -1,8 +1,8 @@
-//! bin entrypoint. Argument parsing and verb dispatch (`resume`, `fresh`,
-//! `list`) land here on top of the `herdr_estate` library; this stub
-//! exists so the crate builds and runs end to end while that dispatch is
-//! still being ported.
+//! bin entrypoint: argument parsing and verb dispatch live in
+//! `herdr_estate::cli`.
 
 fn main() {
-    println!("usage: herdr-estate <resume|fresh|list> [address] [--dry-run]");
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let code = herdr_estate::cli::run(&argv);
+    std::process::exit(code);
 }
