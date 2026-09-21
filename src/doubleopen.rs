@@ -154,6 +154,16 @@ mod tests {
     }
 
     #[test]
+    fn empty_session_name_prints_as_unnamed() {
+        let home = TempDir::new();
+        let sessions = home.path().join(".claude").join("sessions");
+        write_session(&sessions, std::process::id(), "sid-1", "");
+        let _g = EnvGuard::set(&[("HOME", home.path().to_str().unwrap())]);
+        let holder = registry_holder("sid-1").unwrap();
+        assert!(holder.starts_with("unnamed "), "{holder}");
+    }
+
+    #[test]
     fn dead_pid_is_not_a_holder() {
         let home = TempDir::new();
         let sessions = home.path().join(".claude").join("sessions");
@@ -261,6 +271,36 @@ mod tests {
     }
 
     #[test]
+    fn a_row_missing_label_raises_rather_than_dropping_silently() {
+        let fake = FakeHerdr::new();
+        fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "agent_status": "unknown"}
+            ]}}"#,
+            0,
+        );
+        let (_state, _g) = isolated_state(fake.bin_path().to_str().unwrap());
+        let err = live_workspace("home/garden").unwrap_err();
+        assert!(matches!(err, EstateError::Protocol(_)));
+    }
+
+    #[test]
+    fn a_row_missing_workspace_id_raises_rather_than_dropping_silently() {
+        let fake = FakeHerdr::new();
+        fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"label": "home/garden", "agent_status": "unknown"}
+            ]}}"#,
+            0,
+        );
+        let (_state, _g) = isolated_state(fake.bin_path().to_str().unwrap());
+        let err = live_workspace("home/garden").unwrap_err();
+        assert!(matches!(err, EstateError::Protocol(_)));
+    }
+
+    #[test]
     fn prunes_ownership_records_not_in_the_listing() {
         let fake = FakeHerdr::new();
         fake.set_response(
@@ -316,6 +356,20 @@ mod tests {
         assert!(workspace_alive(&row(Some(AgentStatus::Other(
             "something-new".to_string()
         )))));
+    }
+
+    #[test]
+    fn unrecognised_wire_value_deserializes_as_alive() {
+        // Drives the guard from JSON, not a hand-built enum: this is the
+        // only test that exercises AgentStatus's custom Deserialize on a
+        // string it has never seen, the code that decides whether an
+        // unrecognised herdr status becomes Other (alive) or Unknown
+        // (closeable).
+        let ws: Workspace = serde_json::from_value(serde_json::json!({
+            "workspace_id": "w1", "label": "home/garden", "agent_status": "busy"
+        }))
+        .unwrap();
+        assert!(workspace_alive(&ws));
     }
 
     #[test]

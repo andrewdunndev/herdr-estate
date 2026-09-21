@@ -264,6 +264,30 @@ mod tests {
         assert!(!scrubbed.contains_key("CLAUDE_FOO"));
     }
 
+    fn deserialize_status(s: &str) -> AgentStatus {
+        serde_json::from_value(serde_json::Value::String(s.to_string())).unwrap()
+    }
+
+    #[test]
+    fn agent_status_working_is_exactly_working() {
+        assert_eq!(deserialize_status("working"), AgentStatus::Working);
+    }
+
+    #[test]
+    fn agent_status_idle_is_exactly_idle() {
+        assert_eq!(deserialize_status("idle"), AgentStatus::Idle);
+    }
+
+    #[test]
+    fn agent_status_done_is_exactly_done() {
+        assert_eq!(deserialize_status("done"), AgentStatus::Done);
+    }
+
+    #[test]
+    fn agent_status_unknown_is_exactly_unknown() {
+        assert_eq!(deserialize_status("unknown"), AgentStatus::Unknown);
+    }
+
     #[test]
     fn scrub_leaves_control_socket_untouched() {
         let mut env = BTreeMap::new();
@@ -347,6 +371,29 @@ mod tests {
     fn call_herdr_check_false_reports_failure_without_raising() {
         let fake = FakeHerdr::new();
         fake.set_response(0, "", 1);
+        let _g = EnvGuard::set(&[(
+            "HERDR_BIN_PATH",
+            fake.bin_path().to_str().expect("utf8 path"),
+        )]);
+        let result = call_herdr(
+            &["workspace".to_string(), "get".to_string(), "w1".to_string()],
+            false,
+        )
+        .unwrap();
+        assert!(!result.ok);
+        assert_eq!(
+            result.data,
+            serde_json::Value::Object(serde_json::Map::new())
+        );
+    }
+
+    #[test]
+    fn call_herdr_check_false_failure_with_json_stdout_still_yields_empty_data() {
+        // A non-zero exit means the JSON on stdout, if any, describes an
+        // error — never parsed into `data`, whether or not it happens to
+        // be well-formed.
+        let fake = FakeHerdr::new();
+        fake.set_response(0, r#"{"result": {"workspace": {"label": "x"}}}"#, 1);
         let _g = EnvGuard::set(&[(
             "HERDR_BIN_PATH",
             fake.bin_path().to_str().expect("utf8 path"),
