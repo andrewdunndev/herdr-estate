@@ -13,7 +13,7 @@ block, plus a continuity log it reads and writes itself; herdr's own
 resume is never used.
 
 Brand artifacts (`avatar.svg`, `hero.svg`, `favicon.svg`, `brand.png`)
-are deferred to this repo's pre-public sweep; see `.deviations.yaml`.
+are not shipped yet; see `.deviations.yaml`.
 
 ## Install
 
@@ -53,7 +53,10 @@ prompts = ["prompts/base.md"]  # appended to every agent
 env = { }                      # exported into every workspace
 ```
 
-See [`examples/estates.toml`](examples/estates.toml).
+A relative `prompts` entry resolves against the estate's `root`, not the
+directory herdr-estate happens to run from; `~` and `$VAR` expand
+first, so an absolute or `~`-prefixed entry is unaffected. See
+[`examples/estates.toml`](examples/estates.toml).
 
 **The campaign file**, `campaigns/<name>/campaign.md`, carries YAML
 frontmatter: generic keys plus one table per agent kind for flags only
@@ -70,7 +73,9 @@ claude:                       # flags only this agent kind understands
 Unknown keys are ignored, not rejected, so an existing campaign file
 keeps working after this plugin starts reading it. Generic keys map
 through a small per-kind adapter (shipped: `claude`); a kind with no
-adapter starts with no mapped flags and prints one warning line. See
+adapter starts with no mapped flags and prints one warning line. A
+relative `paths` entry resolves against the estate's `root`, the same
+rule `prompts` follows above. See
 [`docs/vocabulary.md`](docs/vocabulary.md) for the six words this
 plugin uses and what each one means.
 
@@ -97,6 +102,18 @@ removes a worktree: herdr's own `worktree remove --force` deletes
 uncommitted work, and removal stays a human act. It uses plain git, not
 `herdr worktree`, because that family takes no `--env` (the address
 could not be exported) and registers a stray base workspace.
+
+## Environment
+
+The agent process started in a workspace inherits the environment of
+that workspace's own shell, which the herdr server spawns, not the
+environment of whatever shell ran `herdr-estate` or `herdr`. Start the
+herdr server from a clean shell. On every `workspace create`,
+herdr-estate empties three names before adding the estate's own `env`
+table, so a value from your own login session never rides along by
+accident: `ANTHROPIC_API_KEY`, `TMUX`, `TMUX_PANE`. An estate table
+entry for one of these wins over the empty value, since it's added
+after. No other variable is touched.
 
 ## The verbs
 

@@ -1,6 +1,6 @@
-# Node 1: standard library only, no build step — one job, a public
-# python:3-slim image tag (not the estate's ci-* catalog image, which
-# has no Python component yet; see .deviations.yaml).
+# Standard library only, no build step — one job, a public python:3-slim
+# image tag (no shared CI component offers a Python job yet; see
+# .deviations.yaml).
 stages:
   - test
 
