@@ -1,0 +1,23 @@
+id = "herdr-estate"
+name = "Estate"
+version = "0.1.0"
+min_herdr_version = "0.9.1"
+description = "Durable campaigns for herdr: resume a campaign's latest conversation or start fresh, addressed by estate/campaign."
+
+[[actions]]
+id = "resume"
+title = "Resume"
+contexts = ["workspace"]
+command = ["bin/herdr-estate", "resume"]
+
+[[actions]]
+id = "fresh"
+title = "Fresh"
+contexts = ["workspace"]
+command = ["bin/herdr-estate", "fresh"]
+
+[[actions]]
+id = "list"
+title = "List"
+contexts = ["workspace"]
+command = ["bin/herdr-estate", "list"]

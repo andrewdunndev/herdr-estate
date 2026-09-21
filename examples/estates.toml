@@ -1,0 +1,12 @@
+[estate.home]
+root = "~/estates/home"        # the repo that holds the campaigns
+campaigns = "campaigns"        # directory under root
+agent = "claude"               # default herdr agent kind
+prompts = ["prompts/base.md"]  # appended to every agent
+env = { }                      # exported into every workspace
+
+# Copy the block above into $HERDR_PLUGIN_CONFIG_DIR/estates.toml (or
+# ~/.config/herdr-estate/estates.toml for a bare-shell invocation), point
+# `root` at a real repo, and add one [estate.<name>] table per estate.
+# Anything private or professional — a login endpoint, a header stamp —
+# is an `env` entry in your own table; this file ships no real names.
