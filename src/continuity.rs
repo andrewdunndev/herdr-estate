@@ -166,4 +166,101 @@ mod tests {
         assert_eq!(civil_from_days(20717), (2026, 9, 21));
         assert_eq!(civil_from_days(-1), (1969, 12, 31));
     }
+
+    #[test]
+    fn civil_from_days_across_century_and_leap_year_boundaries() {
+        // (days since epoch, year, month, day), independently computed —
+        // spans non-leap century years (1700/1800/1900/2100, not
+        // divisible by 400), leap century years (1600/2000/2400, divisible
+        // by 400), ordinary leap years, and the epoch and year-1 corners.
+        // Operator-swap mutations in the arithmetic above (-/+/*// on any
+        // one line) miss at least one of these.
+        const CASES: &[(i64, i64, u32, u32)] = &[
+            (-135140, 1600, 1, 1),
+            (-135081, 1600, 2, 29),
+            (-135080, 1600, 3, 1),
+            (-98557, 1700, 2, 28),
+            (-98556, 1700, 3, 1),
+            (-62033, 1800, 2, 28),
+            (-62032, 1800, 3, 1),
+            (-25509, 1900, 2, 28),
+            (-25508, 1900, 3, 1),
+            (-672, 1968, 2, 29),
+            (-671, 1968, 3, 1),
+            (-1, 1969, 12, 31),
+            (0, 1970, 1, 1),
+            (1, 1970, 1, 2),
+            (788, 1972, 2, 28),
+            (789, 1972, 2, 29),
+            (790, 1972, 3, 1),
+            (10956, 1999, 12, 31),
+            (10957, 2000, 1, 1),
+            (11015, 2000, 2, 28),
+            (11016, 2000, 2, 29),
+            (11017, 2000, 3, 1),
+            (12476, 2004, 2, 28),
+            (12477, 2004, 2, 29),
+            (12478, 2004, 3, 1),
+            (19722, 2023, 12, 31),
+            (19723, 2024, 1, 1),
+            (19781, 2024, 2, 28),
+            (19782, 2024, 2, 29),
+            (19783, 2024, 3, 1),
+            (20717, 2026, 9, 21),
+            (24855, 2038, 1, 19),
+            (47540, 2100, 2, 28),
+            (47541, 2100, 3, 1),
+            (157112, 2400, 2, 28),
+            (157113, 2400, 2, 29),
+            (157114, 2400, 3, 1),
+            (-719162, 1, 1, 1),
+            (-718798, 1, 12, 31),
+            (-682945, 100, 2, 28),
+            (-682944, 100, 3, 1),
+            (-573373, 400, 2, 28),
+            (-573372, 400, 2, 29),
+            (-573371, 400, 3, 1),
+            (-536848, 500, 2, 28),
+            (-536847, 500, 3, 1),
+            (18627, 2020, 12, 31),
+            (18628, 2021, 1, 1),
+            (29404, 2050, 7, 4),
+            (-43664, 1850, 6, 15),
+            (-719103, 1, 3, 1),
+        ];
+        for &(days, y, m, d) in CASES {
+            assert_eq!(civil_from_days(days), (y, m, d), "days={days}");
+        }
+    }
+
+    #[test]
+    fn hostname_matches_the_real_hostname_command() {
+        // Guards against the whole function being replaceable by a
+        // hardcoded string: compare its result against a fresh,
+        // independent shell-out to the same command, not against itself.
+        let expected = std::process::Command::new("hostname")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "unknown".to_string());
+        assert_eq!(hostname(), expected);
+    }
+
+    #[test]
+    fn appended_line_hostname_field_matches_the_real_hostname_command() {
+        let expected = std::process::Command::new("hostname")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "unknown".to_string());
+        let d = TempDir::new();
+        append(d.path(), "sid").unwrap();
+        let written = &read(d.path())[0];
+        let fields: Vec<&str> = written.split_whitespace().collect();
+        assert_eq!(fields[1], expected);
+    }
 }
