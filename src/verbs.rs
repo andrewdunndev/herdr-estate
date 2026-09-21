@@ -502,6 +502,29 @@ mod tests {
         }
     }
 
+    // --- new_conversation_id ---
+
+    #[test]
+    fn new_conversation_id_is_shaped_like_a_v4_uuid() {
+        let id = new_conversation_id().unwrap();
+        assert_eq!(id.len(), 36);
+        let bytes = id.as_bytes();
+        assert_eq!(bytes[8], b'-');
+        assert_eq!(bytes[13], b'-');
+        assert_eq!(bytes[18], b'-');
+        assert_eq!(bytes[23], b'-');
+        assert_eq!(bytes[14], b'4');
+        assert!(matches!(bytes[19], b'8' | b'9' | b'a' | b'b'));
+    }
+
+    #[test]
+    fn new_conversation_id_two_calls_differ() {
+        assert_ne!(
+            new_conversation_id().unwrap(),
+            new_conversation_id().unwrap()
+        );
+    }
+
     // --- agent_name ---
 
     #[test]
@@ -894,6 +917,31 @@ mod tests {
     }
 
     #[test]
+    fn fresh_refuses_on_a_missing_prompt_file_before_closing_anything() {
+        let mut f = make_fixture("claude");
+        if let Some(toml::Value::Table(row)) = f.estates.get_mut("home") {
+            row.insert(
+                "prompts".to_string(),
+                toml::Value::Array(vec![toml::Value::String("prompts/missing.md".to_string())]),
+            );
+        }
+        ownership::record("home/garden", "w1").unwrap();
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown"}
+            ]}}"#,
+            0,
+        );
+        assert!(matches!(
+            fresh(&f.estates, "home/garden", false),
+            Err(EstateError::Config(_))
+        ));
+        // Only the read that found the dormant workspace; nothing closed.
+        assert_eq!(f.fake.call_count(), 1);
+    }
+
+    #[test]
     fn fresh_with_no_prior_workspace_skips_close() {
         let f = make_fixture("claude");
         f.fake.set_response(0, empty_list(), 0);
@@ -996,30 +1044,8 @@ mod tests {
         assert_eq!(f.fake.argv(0), vec!["workspace", "list"]);
     }
 
-    #[test]
-    fn fresh_dry_run_shows_close_when_a_live_owned_workspace_exists() {
-        let f = make_fixture("claude");
-        continuity::append(&f.cdir, "old-sid").unwrap();
-        ownership::record("home/garden", "w1").unwrap();
-        f.fake.set_response(
-            0,
-            r#"{"result": {"workspaces": [
-                {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown"}
-            ]}}"#,
-            0,
-        );
-        let rc = fresh(&f.estates, "home/garden", true).unwrap();
-        assert_eq!(rc, 0);
-        assert_eq!(f.fake.call_count(), 1);
-    }
-
-    #[test]
-    fn fresh_dry_run_no_close_line_without_a_live_workspace() {
-        let f = make_fixture("claude");
-        f.fake.set_response(0, empty_list(), 0);
-        let rc = fresh(&f.estates, "home/garden", true).unwrap();
-        assert_eq!(rc, 0);
-    }
+    // The dry-run "would close:" line is covered in tests/cli.rs, against
+    // stdout of the built binary.
 
     #[test]
     fn dry_run_refuses_when_the_live_workspace_is_alive() {

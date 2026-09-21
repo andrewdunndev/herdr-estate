@@ -294,6 +294,73 @@ fn fresh_alive_workspace_refuses_and_exits_1() {
     assert_eq!(f.fake.call_count(), 1); // only the read, nothing closed or created
 }
 
+/// Record `workspace_id` as ours in `f`'s state dir, the same file
+/// `ownership::record` writes (`{workspace_id: address}` at
+/// `owned.json`), so a dry run's close-line check finds it.
+fn record_owned(f: &Fixture, workspace_id: &str, address: &str) {
+    std::fs::create_dir_all(&f.state_dir).unwrap();
+    std::fs::write(
+        f.state_dir.join("owned.json"),
+        format!("{{\"{workspace_id}\": \"{address}\"}}"),
+    )
+    .unwrap();
+}
+
+#[test]
+fn fresh_dry_run_close_line_names_the_owned_dormant_workspace() {
+    let (f, root) = fixture();
+    let cdir = make_campaign(&root, "garden", "---\n---\n");
+    std::fs::write(
+        cdir.join("sessions.log"),
+        "2026-09-21T00:00:00Z testhost old-sid\n",
+    )
+    .unwrap();
+    record_owned(&f, "w1", "home/garden");
+    f.fake.set_response(
+        0,
+        r#"{"result": {"workspaces": [
+            {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown"}
+        ]}}"#,
+        0,
+    );
+    let out = run(&f, &["fresh", "home/garden", "--dry-run"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("would close:"), "{text}");
+    assert!(text.contains("w1"), "{text}");
+    assert_eq!(f.fake.call_count(), 1);
+}
+
+#[test]
+fn fresh_dry_run_close_line_shows_even_without_a_recorded_conversation() {
+    // The close line tracks live workspace state only, independent of
+    // whether a conversation happens to be recorded.
+    let (f, root) = fixture();
+    make_campaign(&root, "garden", "---\n---\n"); // no sessions.log written
+    record_owned(&f, "w1", "home/garden");
+    f.fake.set_response(
+        0,
+        r#"{"result": {"workspaces": [
+            {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown"}
+        ]}}"#,
+        0,
+    );
+    let out = run(&f, &["fresh", "home/garden", "--dry-run"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("would close:"));
+}
+
+#[test]
+fn fresh_dry_run_no_close_line_without_a_live_workspace() {
+    let (f, root) = fixture();
+    make_campaign(&root, "garden", "---\n---\n");
+    f.fake
+        .set_response(0, r#"{"result": {"workspaces": []}}"#, 0);
+    let out = run(&f, &["fresh", "home/garden", "--dry-run"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!stdout(&out).contains("would close:"));
+}
+
 #[test]
 fn address_derived_from_herdr_workspace_id_when_omitted() {
     let (f, root) = fixture();
