@@ -7,6 +7,7 @@ pub mod config;
 pub mod errors;
 pub mod frontmatter;
 pub mod paths;
+pub mod prompt;
 pub mod verb;
 pub mod worktree;
 
