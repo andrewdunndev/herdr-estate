@@ -94,6 +94,23 @@ fn toml_to_scalar(v: &toml::Value) -> Scalar {
     }
 }
 
+/// An `env` table value rendered to the string herdr's `--env KEY=value`
+/// carries: a number or boolean prints the same as TOML wrote it, so it
+/// is never dropped the way a `.as_str()`-only filter would drop it.
+/// `None` for an array or table — there is no sane single-value rendering
+/// for those, so the caller turns that into a named `ConfigError` instead
+/// of a silent drop.
+fn toml_env_value(v: &toml::Value) -> Option<String> {
+    match v {
+        toml::Value::String(s) => Some(s.clone()),
+        toml::Value::Boolean(b) => Some(b.to_string()),
+        toml::Value::Integer(i) => Some(i.to_string()),
+        toml::Value::Float(f) => Some(f.to_string()),
+        toml::Value::Datetime(d) => Some(d.to_string()),
+        toml::Value::Array(_) | toml::Value::Table(_) => None,
+    }
+}
+
 fn scalar_non_empty_str(s: &Scalar) -> Option<&str> {
     match s {
         Scalar::Str(v) if !v.is_empty() => Some(v),
@@ -204,15 +221,17 @@ pub fn resolve(
         }
     }
 
-    let env: BTreeMap<String, String> = row
-        .get("env")
-        .and_then(|v| v.as_table())
-        .map(|t| {
-            t.iter()
-                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut env: BTreeMap<String, String> = BTreeMap::new();
+    if let Some(t) = row.get("env").and_then(|v| v.as_table()) {
+        for (k, v) in t.iter() {
+            let rendered = toml_env_value(v).ok_or_else(|| {
+                EstateError::Config(format!(
+                    "estate '{estate_name}' env.{k}: must be a string, number or boolean"
+                ))
+            })?;
+            env.insert(k.clone(), rendered);
+        }
+    }
 
     Ok(Campaign {
         address: address.to_string(),
@@ -316,6 +335,33 @@ mod tests {
     }
 
     #[test]
+    fn empty_string_campaign_agent_falls_back_to_estate_default() {
+        let d = TempDir::new();
+        let root = d.path().join("home");
+        make_estate(&root, "garden", "---\nagent: \"\"\n---\n");
+        let mut r = row(&root);
+        r.insert(
+            "agent".to_string(),
+            toml::Value::String("codex".to_string()),
+        );
+        let estates = estates_with(r);
+        let c = resolve(&estates, "home/garden", false).unwrap();
+        assert_eq!(c.kind, AgentKind::Other("codex".to_string()));
+    }
+
+    #[test]
+    fn empty_string_estate_agent_falls_back_to_default_kind() {
+        let d = TempDir::new();
+        let root = d.path().join("home");
+        make_estate(&root, "garden", "---\n---\n");
+        let mut r = row(&root);
+        r.insert("agent".to_string(), toml::Value::String(String::new()));
+        let estates = estates_with(r);
+        let c = resolve(&estates, "home/garden", false).unwrap();
+        assert_eq!(c.kind, AgentKind::Claude);
+    }
+
+    #[test]
     fn paths_expanded() {
         let d = TempDir::new();
         let root = d.path().join("home");
@@ -357,6 +403,35 @@ mod tests {
         let estates = estates_with(r);
         let c = resolve(&estates, "home/garden", false).unwrap();
         assert_eq!(c.env["K"], "V");
+    }
+
+    #[test]
+    fn estate_env_integer_value_renders_not_drops() {
+        let d = TempDir::new();
+        let root = d.path().join("home");
+        make_estate(&root, "garden", "---\n---\n");
+        let mut r = row(&root);
+        let mut env = toml::Table::new();
+        env.insert("PORT".to_string(), toml::Value::Integer(8080));
+        r.insert("env".to_string(), toml::Value::Table(env));
+        let estates = estates_with(r);
+        let c = resolve(&estates, "home/garden", false).unwrap();
+        assert_eq!(c.env["PORT"], "8080");
+    }
+
+    #[test]
+    fn estate_env_table_value_is_a_named_config_error() {
+        let d = TempDir::new();
+        let root = d.path().join("home");
+        make_estate(&root, "garden", "---\n---\n");
+        let mut r = row(&root);
+        let mut env = toml::Table::new();
+        env.insert("BAD".to_string(), toml::Value::Table(toml::Table::new()));
+        r.insert("env".to_string(), toml::Value::Table(env));
+        let estates = estates_with(r);
+        let err = resolve(&estates, "home/garden", false).unwrap_err();
+        assert!(matches!(err, EstateError::Config(_)));
+        assert!(err.to_string().contains("BAD"));
     }
 
     #[test]
@@ -488,6 +563,21 @@ mod tests {
     }
 
     #[test]
+    fn empty_string_worktree_repo_is_treated_as_no_worktree_key() {
+        let d = TempDir::new();
+        let root = d.path().join("home");
+        make_estate(
+            &root,
+            "garden",
+            "---\nworktree:\n  repo: \"\"\n  branch: wt/site-work\n---\n",
+        );
+        let estates = estates_with(row(&root));
+        let c = resolve(&estates, "home/garden", false).unwrap();
+        // No worktree ensured: the plain estate root, untouched.
+        assert_eq!(c.workdir, root);
+    }
+
+    #[test]
     fn dry_run_never_creates_the_worktree() {
         let d = TempDir::new();
         let root = d.path().join("home");
@@ -559,6 +649,27 @@ mod tests {
         let estates = estates_with(row(&root));
         let c = resolve(&estates, "home/garden", false).unwrap();
         assert_eq!(c.add_dirs, [root.join("notes")]);
+    }
+
+    #[test]
+    fn absolute_campaign_paths_pass_through() {
+        let d = TempDir::new();
+        let root = d.path().join("home");
+        make_estate(&root, "garden", "---\npaths: [/a]\n---\n");
+        let estates = estates_with(row(&root));
+        let c = resolve(&estates, "home/garden", false).unwrap();
+        assert_eq!(c.add_dirs, [PathBuf::from("/a")]);
+    }
+
+    #[test]
+    fn estate_with_neither_paths_nor_kind_table_yields_empty_add_dirs_and_flags() {
+        let d = TempDir::new();
+        let root = d.path().join("home");
+        make_estate(&root, "garden", "---\n---\n");
+        let estates = estates_with(row(&root));
+        let c = resolve(&estates, "home/garden", false).unwrap();
+        assert_eq!(c.add_dirs, Vec::<PathBuf>::new());
+        assert!(c.kind_flags.is_empty());
     }
 
     fn init_git_repo(path: &Path) {
