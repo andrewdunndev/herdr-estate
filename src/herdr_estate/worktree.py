@@ -46,6 +46,21 @@ def _existing_worktree(repo: Path, branch: str) -> str | None:
     return None
 
 
+def would_ensure_worktree(repo_path: str, branch: str) -> Path:
+    """The read-only half of ensure_worktree: validates the repo exists
+    and returns the path a real run would use, without running
+    `git worktree add`, `git worktree prune`, or creating a branch — so
+    --dry-run can print it without mutating the repo (design note,
+    "Worktrees: optional")."""
+    repo = expand(repo_path)
+    if not repo.is_dir():
+        raise ConfigError(f"worktree repo missing: {repo}")
+    existing = _existing_worktree(repo, branch)
+    if existing:
+        return Path(existing)
+    return state_dir() / "worktrees" / repo.name / branch.replace("/", "-")
+
+
 def ensure_worktree(repo_path: str, branch: str) -> Path:
     """Idempotent: `git worktree add` only when `branch`'s worktree isn't
     already registered. A new branch is cut from the remote default

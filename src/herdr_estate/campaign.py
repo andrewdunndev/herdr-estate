@@ -26,7 +26,7 @@ class Campaign:
     env: dict = field(default_factory=dict)
 
 
-def resolve(estates: dict[str, dict], address: str) -> Campaign:
+def resolve(estates: dict[str, dict], address: str, *, dry_run: bool = False) -> Campaign:
     estate_name, campaign_name = parse_address(address)
     row = estates.get(estate_name)
     if row is None:
@@ -46,19 +46,34 @@ def resolve(estates: dict[str, dict], address: str) -> Campaign:
     kind = fm.get("agent") or row.get("agent", DEFAULT_AGENT_KIND)
     if not isinstance(kind, str):
         kind = DEFAULT_AGENT_KIND
-    add_dirs = [expand(p) for p in fm.get("paths", []) if isinstance(p, str) and p]
-    prompt_files = [expand(p) for p in row.get("prompts", [])]
+
+    def _rooted(p: str) -> Path:
+        """A relative `paths`/`prompts` entry resolves against the
+        estate's root, not this process's cwd; `~` and $VAR expansion
+        (paths.expand) still applies first, and an already-absolute
+        result is left alone."""
+        ep = expand(p)
+        return ep if ep.is_absolute() else root / ep
+
+    add_dirs = [_rooted(p) for p in fm.get("paths", []) if isinstance(p, str) and p]
+    prompt_files = [_rooted(p) for p in row.get("prompts", [])]
     raw_flags = fm.get(kind)
     kind_flags = raw_flags if isinstance(raw_flags, dict) else {}
 
     # A campaign with no `worktree` key runs in the estate's plain
     # directory. With one, resume/fresh ensure it exists, use it as the
     # workspace cwd, and add it to the agent's paths (design note,
-    # "Worktrees: optional").
+    # "Worktrees: optional"). dry_run never runs `git worktree add` or
+    # creates a branch: it only computes and prints the path a real run
+    # would use.
     workdir = root
     wt = fm.get("worktree")
     if isinstance(wt, dict) and wt.get("repo") and wt.get("branch"):
-        workdir = worktree_mod.ensure_worktree(wt["repo"], wt["branch"])
+        if dry_run:
+            workdir = worktree_mod.would_ensure_worktree(wt["repo"], wt["branch"])
+            print(f"{address}: would ensure worktree: {workdir}")
+        else:
+            workdir = worktree_mod.ensure_worktree(wt["repo"], wt["branch"])
         add_dirs.append(workdir)
 
     return Campaign(address=address, estate=estate_name, name=campaign_name,

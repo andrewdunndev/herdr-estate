@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -103,6 +104,68 @@ class ResolveCampaign(unittest.TestCase):
             ensure.assert_called_once_with("/some/repo", "wt/site-work")
             self.assertEqual(c.workdir, wt_path)
             self.assertIn(wt_path, c.add_dirs)
+
+    def test_dry_run_uses_would_ensure_worktree_not_ensure_worktree(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "home"
+            _make_estate(root, "garden",
+                         "---\nworktree:\n  repo: /some/repo\n"
+                         "  branch: wt/site-work\n---\n")
+            estates = {"home": {"root": str(root)}}
+            wt_path = Path(d) / "the-worktree"
+            with mock.patch("herdr_estate.campaign.worktree_mod.ensure_worktree") as ensure, \
+                 mock.patch("herdr_estate.campaign.worktree_mod.would_ensure_worktree",
+                             return_value=wt_path) as would_ensure:
+                c = resolve(estates, "home/garden", dry_run=True)
+            ensure.assert_not_called()
+            would_ensure.assert_called_once_with("/some/repo", "wt/site-work")
+            self.assertEqual(c.workdir, wt_path)
+            self.assertIn(wt_path, c.add_dirs)
+
+
+class RelativePathsRootAgainstEstate(unittest.TestCase):
+    def test_relative_prompts_resolve_against_root_not_cwd(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "home"
+            _make_estate(root, "garden")
+            estates = {"home": {"root": str(root), "prompts": ["prompts/base.md"]}}
+            elsewhere = Path(d)
+            cwd = os.getcwd()
+            os.chdir(elsewhere)
+            try:
+                c = resolve(estates, "home/garden")
+            finally:
+                os.chdir(cwd)
+            self.assertEqual(c.prompt_files, [root / "prompts" / "base.md"])
+
+    def test_absolute_prompts_pass_through(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "home"
+            _make_estate(root, "garden")
+            estates = {"home": {"root": str(root), "prompts": ["/etc/base.md"]}}
+            c = resolve(estates, "home/garden")
+            self.assertEqual(c.prompt_files, [Path("/etc/base.md")])
+
+    def test_relative_campaign_paths_resolve_against_root_not_cwd(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "home"
+            _make_estate(root, "garden", "---\npaths: [notes]\n---\n")
+            estates = {"home": {"root": str(root)}}
+            cwd = os.getcwd()
+            os.chdir(Path(d))
+            try:
+                c = resolve(estates, "home/garden")
+            finally:
+                os.chdir(cwd)
+            self.assertEqual(c.add_dirs, [root / "notes"])
+
+    def test_absolute_campaign_paths_pass_through(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "home"
+            _make_estate(root, "garden", "---\npaths: [/a]\n---\n")
+            estates = {"home": {"root": str(root)}}
+            c = resolve(estates, "home/garden")
+            self.assertEqual(c.add_dirs, [Path("/a")])
 
 
 if __name__ == "__main__":
