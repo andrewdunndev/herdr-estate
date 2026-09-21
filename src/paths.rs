@@ -5,8 +5,9 @@ use std::path::PathBuf;
 
 /// A non-empty environment variable, or `None` — matches Python's `if d:`
 /// truthiness check on `os.environ.get(...)`, where an empty string is
-/// treated the same as unset.
-fn non_empty_env(key: &str) -> Option<String> {
+/// treated the same as unset. `pub(crate)`: `herdrcli` and `verbs` both
+/// read env vars with this same truthiness rule.
+pub(crate) fn non_empty_env(key: &str) -> Option<String> {
     match env::var(key) {
         Ok(v) if !v.is_empty() => Some(v),
         _ => None,

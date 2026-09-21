@@ -3,13 +3,18 @@
 
 pub mod adapters;
 pub mod campaign;
+pub mod cli;
 pub mod config;
 pub mod continuity;
+pub mod doubleopen;
 pub mod errors;
 pub mod frontmatter;
+pub mod herdrcli;
+pub mod ownership;
 pub mod paths;
 pub mod prompt;
 pub mod verb;
+pub mod verbs;
 pub mod worktree;
 
 /// Test-only support for the tests scattered across this crate's modules
@@ -108,6 +113,99 @@ pub(crate) mod test_support {
     impl Drop for TempDir {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    /// A fake `herdr` executable for tests that cross the herdr CLI
+    /// boundary. Point `HERDR_BIN_PATH` at `bin_path()`; every call the
+    /// code under test makes records its exact argv and environment to
+    /// this directory, in call order, and replays whatever canned
+    /// response `set_response` queued for that call index — so a test
+    /// asserts the real thing (what herdr was actually asked to do)
+    /// rather than that a mock was called.
+    pub struct FakeHerdr {
+        dir: TempDir,
+    }
+
+    impl FakeHerdr {
+        pub fn new() -> Self {
+            let dir = TempDir::new();
+            let script = dir.path().join("herdr");
+            let calls = dir.path().join("calls");
+            std::fs::create_dir_all(&calls).expect("create fake herdr calls dir");
+            let body = "#!/bin/sh\n\
+                DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)/calls\"\n\
+                IDXFILE=\"$DIR/count\"\n\
+                if [ -f \"$IDXFILE\" ]; then IDX=$(cat \"$IDXFILE\"); else IDX=0; fi\n\
+                echo $((IDX + 1)) > \"$IDXFILE\"\n\
+                for a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$DIR/$IDX.argv\"\n\
+                env > \"$DIR/$IDX.env\"\n\
+                if [ -f \"$DIR/$IDX.stdout\" ]; then cat \"$DIR/$IDX.stdout\"; fi\n\
+                if [ -f \"$DIR/$IDX.exit\" ]; then exit \"$(cat \"$DIR/$IDX.exit\")\"; fi\n\
+                exit 0\n";
+            std::fs::write(&script, body).expect("write fake herdr script");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = std::fs::metadata(&script)
+                    .expect("stat fake herdr script")
+                    .permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(&script, perms).expect("chmod fake herdr script");
+            }
+            FakeHerdr { dir }
+        }
+
+        pub fn bin_path(&self) -> std::path::PathBuf {
+            self.dir.path().join("herdr")
+        }
+
+        fn calls_dir(&self) -> std::path::PathBuf {
+            self.dir.path().join("calls")
+        }
+
+        /// Queue the canned stdout and exit code for the call at
+        /// `index` (0-based, in the order the code under test makes
+        /// them), before that code runs.
+        pub fn set_response(&self, index: usize, stdout: &str, exit_code: i32) {
+            std::fs::write(self.calls_dir().join(format!("{index}.stdout")), stdout)
+                .expect("write fake herdr canned stdout");
+            std::fs::write(
+                self.calls_dir().join(format!("{index}.exit")),
+                exit_code.to_string(),
+            )
+            .expect("write fake herdr canned exit code");
+        }
+
+        pub fn call_count(&self) -> usize {
+            std::fs::read_to_string(self.calls_dir().join("count"))
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(0)
+        }
+
+        pub fn argv(&self, index: usize) -> Vec<String> {
+            std::fs::read_to_string(self.calls_dir().join(format!("{index}.argv")))
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_string)
+                .collect()
+        }
+
+        pub fn env_value(&self, index: usize, key: &str) -> Option<String> {
+            let text =
+                std::fs::read_to_string(self.calls_dir().join(format!("{index}.env"))).ok()?;
+            text.lines().find_map(|line| {
+                line.split_once('=')
+                    .filter(|(k, _)| *k == key)
+                    .map(|(_, v)| v.to_string())
+            })
+        }
+    }
+
+    impl Default for FakeHerdr {
+        fn default() -> Self {
+            Self::new()
         }
     }
 }
