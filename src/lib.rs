@@ -4,6 +4,7 @@
 pub mod adapters;
 pub mod campaign;
 pub mod config;
+pub mod continuity;
 pub mod errors;
 pub mod frontmatter;
 pub mod paths;
