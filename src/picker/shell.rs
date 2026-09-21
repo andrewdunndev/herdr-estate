@@ -131,3 +131,101 @@ fn translate_key(key: KeyEvent) -> Option<CoreEvent> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod translate_key_tests {
+    use super::*;
+
+    fn press(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, modifiers)
+    }
+
+    #[test]
+    fn ctrl_c_is_esc() {
+        assert!(matches!(
+            translate_key(press(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Some(CoreEvent::Esc)
+        ));
+    }
+
+    #[test]
+    fn ctrl_n_is_down() {
+        assert!(matches!(
+            translate_key(press(KeyCode::Char('n'), KeyModifiers::CONTROL)),
+            Some(CoreEvent::Down)
+        ));
+    }
+
+    #[test]
+    fn ctrl_p_is_up() {
+        assert!(matches!(
+            translate_key(press(KeyCode::Char('p'), KeyModifiers::CONTROL)),
+            Some(CoreEvent::Up)
+        ));
+    }
+
+    #[test]
+    fn ctrl_with_an_unmapped_letter_is_ignored() {
+        assert!(translate_key(press(KeyCode::Char('x'), KeyModifiers::CONTROL)).is_none());
+    }
+
+    #[test]
+    fn a_plain_char_is_a_char_event() {
+        assert!(matches!(
+            translate_key(press(KeyCode::Char('a'), KeyModifiers::NONE)),
+            Some(CoreEvent::Char('a'))
+        ));
+    }
+
+    #[test]
+    fn backspace_is_backspace() {
+        assert!(matches!(
+            translate_key(press(KeyCode::Backspace, KeyModifiers::NONE)),
+            Some(CoreEvent::Backspace)
+        ));
+    }
+
+    #[test]
+    fn arrow_up_is_up() {
+        assert!(matches!(
+            translate_key(press(KeyCode::Up, KeyModifiers::NONE)),
+            Some(CoreEvent::Up)
+        ));
+    }
+
+    #[test]
+    fn arrow_down_is_down() {
+        assert!(matches!(
+            translate_key(press(KeyCode::Down, KeyModifiers::NONE)),
+            Some(CoreEvent::Down)
+        ));
+    }
+
+    #[test]
+    fn enter_is_enter() {
+        assert!(matches!(
+            translate_key(press(KeyCode::Enter, KeyModifiers::NONE)),
+            Some(CoreEvent::Enter)
+        ));
+    }
+
+    #[test]
+    fn esc_is_esc() {
+        assert!(matches!(
+            translate_key(press(KeyCode::Esc, KeyModifiers::NONE)),
+            Some(CoreEvent::Esc)
+        ));
+    }
+
+    #[test]
+    fn an_unmapped_key_is_ignored() {
+        assert!(translate_key(press(KeyCode::Tab, KeyModifiers::NONE)).is_none());
+    }
+
+    #[test]
+    fn a_non_press_kind_is_ignored_even_for_a_mapped_key() {
+        let mut key = press(KeyCode::Enter, KeyModifiers::NONE);
+        key.kind = KeyEventKind::Release;
+        assert!(translate_key(key).is_none());
+    }
+}
