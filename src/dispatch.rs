@@ -4,10 +4,14 @@
 //! functions `herdr-estate resume`/`fresh` call, so every guard those
 //! verbs enforce (ownership, alive, duplicate labels, unconfirmed close,
 //! validation before close) applies unchanged. The picker adds no way
-//! around them: a live row only ever focuses an already-open workspace,
-//! and a dormant or new row's create-or-refuse decision is made entirely
-//! inside the verb it calls.
+//! around them: a Live row's workspace is re-read at dispatch time
+//! (`doubleopen::live_workspace`) and only focused directly when it is
+//! still genuinely alive; a row that turned out dormant, gone or
+//! duplicated by the time Enter fires is handed to `resume_with_ids`
+//! just like a `Dormant` row, so the create-or-refuse decision is always
+//! made inside the verb, never on the stale row the list build saw.
 
+use crate::doubleopen;
 use crate::errors::EstateError;
 use crate::herdrcli;
 use crate::picker::core::{Row, RowState};
@@ -18,7 +22,27 @@ use crate::verbs;
 /// propagate without focusing anything.
 pub fn open_row(estates: &toml::Table, row: &Row) -> Result<(), EstateError> {
     let workspace_id = match &row.state {
-        RowState::Live { workspace_id, .. } => workspace_id.clone(),
+        // A Live row only names an address that carried a workspace when
+        // the list was built; the picker can sit open for a while, so
+        // that workspace's liveness (or existence) is re-read here
+        // rather than trusted from the stale row. Only a workspace that
+        // is genuinely alive right now is focus-only — anything else
+        // (the agent exited, the workspace closed, a duplicate label)
+        // goes through `resume_with_ids`, which owns the alive check,
+        // the close-and-recreate decision and the duplicate-label
+        // refusal, exactly as it does for a `Dormant` row.
+        RowState::Live { .. } => match doubleopen::live_workspace(&row.address)? {
+            Some(ws) if doubleopen::workspace_alive(&ws) => ws.workspace_id,
+            _ => {
+                let result = verbs::resume_with_ids(estates, &row.address, false)?;
+                result.workspace_id.ok_or_else(|| {
+                    EstateError::Protocol(format!(
+                        "{}: resume did not report a workspace id",
+                        row.address
+                    ))
+                })?
+            }
+        },
         RowState::Dormant { .. } => {
             let result = verbs::resume_with_ids(estates, &row.address, false)?;
             result.workspace_id.ok_or_else(|| {
@@ -119,6 +143,15 @@ mod tests {
     #[test]
     fn live_row_only_focuses_the_known_workspace_id() {
         let f = make_fixture();
+        // The dispatch-time re-read agrees with the row: still alive,
+        // same workspace id.
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w9", "label": "home/garden", "agent_status": "working"}
+            ]}}"#,
+            0,
+        );
         let row = Row {
             address: "home/garden".to_string(),
             state: RowState::Live {
@@ -127,8 +160,9 @@ mod tests {
             },
         };
         open_row(&f.estates, &row).unwrap();
-        assert_eq!(f.fake.call_count(), 1);
-        assert_eq!(f.fake.argv(0), vec!["workspace", "focus", "w9"]);
+        assert_eq!(f.fake.call_count(), 2);
+        assert_eq!(f.fake.argv(0), vec!["workspace", "list"]);
+        assert_eq!(f.fake.argv(1), vec!["workspace", "focus", "w9"]);
     }
 
     #[test]
@@ -158,13 +192,27 @@ mod tests {
         assert_eq!(f.fake.argv(0), vec!["workspace", "list"]);
         assert_eq!(f.fake.argv(1)[..3], ["workspace", "create", "--cwd"]);
         assert_eq!(f.fake.argv(2)[..2], ["agent", "start"]);
+        // The verb this branch must call, pinned to its distinguishing
+        // flag: `fresh_with_ids` in its place would produce the same
+        // argv shape (`agent start ...`) but never `--resume`, and would
+        // append a new conversation id to the log instead of leaving it
+        // alone.
+        let start_argv = f.fake.argv(2);
+        assert!(start_argv.iter().any(|a| a == "--resume"), "{start_argv:?}");
+        assert!(start_argv.iter().any(|a| a == "old-sid"), "{start_argv:?}");
         assert_eq!(f.fake.argv(3), vec!["workspace", "focus", "w-new"]);
+        let lines = crate::continuity::read(&cdir);
+        assert_eq!(
+            lines.last().unwrap().split_whitespace().last(),
+            Some("old-sid"),
+            "resume must not append a new conversation id"
+        );
     }
 
     #[test]
     fn new_row_freshens_then_focuses_the_new_workspace() {
         let f = make_fixture();
-        f.campaign("attic");
+        let cdir = f.campaign("attic");
         f.fake.set_response(0, empty_list(), 0);
         f.fake.set_response(1, CREATE_OK, 0);
         f.fake.set_response(2, r#"{"result": {}}"#, 0);
@@ -179,7 +227,17 @@ mod tests {
         assert_eq!(f.fake.argv(0), vec!["workspace", "list"]);
         assert_eq!(f.fake.argv(1)[..2], ["workspace", "create"]);
         assert_eq!(f.fake.argv(2)[..2], ["agent", "start"]);
+        // Mirrors the dormant case: a New row's verb must be
+        // `fresh_with_ids`, never `--resume` (there is nothing recorded
+        // to resume), and it must append the new conversation id.
+        let start_argv = f.fake.argv(2);
+        assert!(
+            !start_argv.iter().any(|a| a == "--resume"),
+            "{start_argv:?}"
+        );
         assert_eq!(f.fake.argv(3), vec!["workspace", "focus", "w-new"]);
+        let lines = crate::continuity::read(&cdir);
+        assert_eq!(lines.len(), 1, "fresh must append exactly one new line");
     }
 
     #[test]
@@ -202,6 +260,130 @@ mod tests {
         let err = open_row(&f.estates, &row).unwrap_err();
         assert!(matches!(err, EstateError::Guard(_)));
         assert_eq!(f.fake.call_count(), 1); // only the workspace list probe
+    }
+
+    #[test]
+    fn live_row_whose_workspace_went_not_alive_resumes_instead_of_focusing_the_dead_shell() {
+        // The row was built while an agent was still attached (Live,
+        // agent_status "working"), but by dispatch time the agent has
+        // exited: a fresh `workspace list` shows the same workspace id
+        // with agent_status "unknown" (not alive). Enter must not focus
+        // that dead shell — it must resume the recorded conversation,
+        // which owns closing and recreating the workspace.
+        let f = make_fixture();
+        let cdir = f.campaign("garden");
+        crate::continuity::append(&cdir, "old-sid").unwrap();
+        let proj = f.user_home().join(".claude").join("projects").join("p");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(proj.join("old-sid.jsonl"), "{}\n").unwrap();
+        crate::ownership::record("home/garden", "w1").unwrap();
+
+        let not_alive_list = r#"{"result": {"workspaces": [
+            {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown"}
+        ]}}"#;
+        // 0: open_row's own re-read. 1: check_live_workspace inside
+        // resume_with_ids. 2: close_if_ours's pre-close label get. 3: the
+        // close itself. 4: create. 5: agent start. 6: dispatch's focus.
+        f.fake.set_response(0, not_alive_list, 0);
+        f.fake.set_response(1, not_alive_list, 0);
+        f.fake.set_response(
+            2,
+            r#"{"result": {"workspace": {"label": "home/garden"}}}"#,
+            0,
+        );
+        f.fake.set_response(3, r#"{"result": {}}"#, 0);
+        f.fake.set_response(4, CREATE_OK, 0);
+        f.fake.set_response(5, r#"{"result": {}}"#, 0);
+        f.fake.set_response(6, r#"{"result": {}}"#, 0);
+
+        // The row as the picker drew it: still Live, still carrying the
+        // stale workspace id from the listing that built the row.
+        let row = Row {
+            address: "home/garden".to_string(),
+            state: RowState::Live {
+                workspace_id: "w1".to_string(),
+                agent_status: "working".to_string(),
+            },
+        };
+        open_row(&f.estates, &row).unwrap();
+
+        assert_eq!(f.fake.call_count(), 7);
+        assert_eq!(f.fake.argv(0), vec!["workspace", "list"]);
+        assert_eq!(f.fake.argv(1), vec!["workspace", "list"]);
+        assert_eq!(f.fake.argv(2), vec!["workspace", "get", "w1"]);
+        assert_eq!(f.fake.argv(3), vec!["workspace", "close", "w1"]);
+        assert_eq!(f.fake.argv(4)[..3], ["workspace", "create", "--cwd"]);
+        let start_argv = f.fake.argv(5);
+        assert!(start_argv.iter().any(|a| a == "--resume"));
+        assert!(start_argv.iter().any(|a| a == "old-sid"));
+        assert_eq!(f.fake.argv(6), vec!["workspace", "focus", "w-new"]);
+
+        let lines = crate::continuity::read(&cdir);
+        assert_eq!(
+            lines.last().unwrap().split_whitespace().last(),
+            Some("old-sid")
+        );
+    }
+
+    #[test]
+    fn live_row_whose_workspace_closed_meanwhile_falls_through_to_fresh() {
+        // Symmetric case: the workspace the row named is gone entirely by
+        // dispatch time. With no recorded conversation either, this must
+        // route through resume (which itself falls back to fresh) rather
+        // than fail with a focus error on a workspace id that no longer
+        // exists.
+        let f = make_fixture();
+        f.campaign("attic");
+        f.fake.set_response(0, empty_list(), 0); // open_row's re-read
+        f.fake.set_response(1, empty_list(), 0); // check_live_workspace
+        f.fake.set_response(2, CREATE_OK, 0);
+        f.fake.set_response(3, r#"{"result": {}}"#, 0);
+        f.fake.set_response(4, r#"{"result": {}}"#, 0);
+
+        let row = Row {
+            address: "home/attic".to_string(),
+            state: RowState::Live {
+                workspace_id: "gone-w1".to_string(),
+                agent_status: "working".to_string(),
+            },
+        };
+        open_row(&f.estates, &row).unwrap();
+
+        assert_eq!(f.fake.call_count(), 5);
+        assert_eq!(f.fake.argv(0), vec!["workspace", "list"]);
+        assert_eq!(f.fake.argv(1), vec!["workspace", "list"]);
+        assert_eq!(f.fake.argv(2)[..2], ["workspace", "create"]);
+        assert_eq!(f.fake.argv(3)[..2], ["agent", "start"]);
+        assert_eq!(f.fake.argv(4), vec!["workspace", "focus", "w-new"]);
+    }
+
+    #[test]
+    fn duplicate_labels_on_a_live_row_refuse_before_focusing_either() {
+        // The row was built as an ordinary Live row from whichever
+        // workspace `workspace list` returned first; the dispatch-time
+        // re-read must still see both and refuse rather than focus one
+        // of the two arbitrarily.
+        let f = make_fixture();
+        f.campaign("garden");
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown"},
+                {"workspace_id": "w2", "label": "home/garden", "agent_status": "unknown"}
+            ]}}"#,
+            0,
+        );
+
+        let row = Row {
+            address: "home/garden".to_string(),
+            state: RowState::Live {
+                workspace_id: "w1".to_string(),
+                agent_status: "unknown".to_string(),
+            },
+        };
+        let err = open_row(&f.estates, &row).unwrap_err();
+        assert!(matches!(err, EstateError::Guard(_)));
+        assert_eq!(f.fake.call_count(), 1);
     }
 
     #[test]
