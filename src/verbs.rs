@@ -9,7 +9,13 @@
 //! reused across a server restart could otherwise misidentify is never
 //! enough on its own: a workspace not in the ownership record is left
 //! alone, and both verbs refuse instead of creating a second one under the
-//! same label. Either verb refuses outright when the workspace is alive.
+//! same label. Either verb refuses outright when the workspace is alive,
+//! or when more than one workspace already carries the address
+//! (`doubleopen::live_workspace`). The close itself is re-confirmed
+//! immediately before it runs, and again treated as unsafe to act past
+//! when that confirmation fails or herdr reports the close itself
+//! failed: the verb stops right there rather than creating a replacement
+//! over a workspace that might still be there.
 //! `--dry-run` runs every one of these read-only checks (they decide
 //! whether the printed plan would create alone or close-then-create) and
 //! only skips the herdr calls that actually create, close or start
@@ -137,9 +143,25 @@ pub fn derive_address() -> Result<String, EstateError> {
     })
 }
 
-/// The proven primitive: re-check the label immediately before closing,
-/// and skip (never force) when it no longer matches.
-pub fn close_if_ours(workspace_id: &str, address: &str) -> Result<(), EstateError> {
+/// Whether `close_if_ours` actually closed the workspace, or could not
+/// confirm it was safe to. `NotConfirmed` covers every cause the caller
+/// treats the same way: the pre-close `workspace get` itself failed, the
+/// label had changed since the `workspace list` scan that found this row,
+/// or herdr reported the close call itself failed. None of these justify
+/// forcing the close, and none of them justify creating a replacement
+/// over a workspace that might still be there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseOutcome {
+    Closed,
+    NotConfirmed,
+}
+
+/// Whether `workspace_id`'s label is still `address`, via a fresh
+/// `workspace get`. Read-only (`check: false`), so it is safe to run
+/// under `--dry-run` too. A failed get (herdr reported an error, or the
+/// response carried no label) counts as "no longer matches" — there is
+/// nothing here to trust either way.
+fn confirm_label_matches(workspace_id: &str, address: &str) -> Result<bool, EstateError> {
     let result = herdrcli::call_herdr(
         &[
             "workspace".to_string(),
@@ -156,18 +178,32 @@ pub fn close_if_ours(workspace_id: &str, address: &str) -> Result<(), EstateErro
     } else {
         None
     };
-    if label.as_deref() != Some(address) {
-        return Ok(());
+    Ok(label.as_deref() == Some(address))
+}
+
+/// The proven primitive: re-check the label immediately before closing
+/// (herdr's ids are reused across a server restart, so the match a
+/// `workspace list` scan saw a moment ago is not proof enough here), then
+/// close. Never forces anything: a label that no longer matches, or a
+/// close herdr itself reports as failed, both come back `NotConfirmed`
+/// for the caller to refuse on rather than a raw close.
+pub fn close_if_ours(workspace_id: &str, address: &str) -> Result<CloseOutcome, EstateError> {
+    if !confirm_label_matches(workspace_id, address)? {
+        return Ok(CloseOutcome::NotConfirmed);
     }
-    herdrcli::call_herdr(
+    let closed = herdrcli::call_herdr(
         &[
             "workspace".to_string(),
             "close".to_string(),
             workspace_id.to_string(),
         ],
-        true,
+        false,
     )?;
-    Ok(())
+    Ok(if closed.ok {
+        CloseOutcome::Closed
+    } else {
+        CloseOutcome::NotConfirmed
+    })
 }
 
 fn build_agent_argv(campaign: &Campaign, verb: Verb, conversation_id: &str) -> Vec<String> {
@@ -268,7 +304,9 @@ fn check_live_workspace(address: &str) -> Result<Option<Workspace>, EstateError>
 /// Everything that can fail without herdr (prompt files exist) is
 /// validated before `ws` (an owned, non-alive workspace) is closed.
 /// Creates the replacement, validates the response, records ownership of
-/// the new workspace, and starts the agent.
+/// the new workspace, and starts the agent. When `ws` is present but its
+/// close could not be confirmed, stops here with a guard error naming the
+/// workspace: nothing is created, no agent is started.
 fn open_workspace(
     campaign: &Campaign,
     address: &str,
@@ -280,10 +318,19 @@ fn open_workspace(
         prompt::write_prompt(&campaign.estate, &campaign.name, &campaign.prompt_files)?;
     }
     if let Some(ws) = ws {
-        close_if_ours(&ws.workspace_id, address)?;
-        ownership::forget(&ws.workspace_id).map_err(|e| {
-            EstateError::Config(format!("could not update the ownership record: {e}"))
-        })?;
+        match close_if_ours(&ws.workspace_id, address)? {
+            CloseOutcome::Closed => {
+                ownership::forget(&ws.workspace_id).map_err(|e| {
+                    EstateError::Config(format!("could not update the ownership record: {e}"))
+                })?;
+            }
+            CloseOutcome::NotConfirmed => {
+                return Err(EstateError::Guard(format!(
+                    "{address}: workspace {} could not be confirmed closed — refusing to create a replacement",
+                    ws.workspace_id
+                )));
+            }
+        }
     }
     let created = herdrcli::call_herdr(create_cmd, true)?;
     let (workspace_id, pane_id) = created_ids(&created)?;
@@ -313,6 +360,41 @@ fn new_conversation_id() -> Result<String, EstateError> {
 
 fn short(id: &str) -> String {
     id.chars().take(8).collect()
+}
+
+/// The `--dry-run` plan: prints what the real run would do, without
+/// making the calls that create, close or start anything. When a live
+/// workspace was found, its close is confirmed the same read-only way the
+/// real run would confirm it — dry run can know this much in advance,
+/// and refuses the same way the real run would. It cannot know whether a
+/// future close call itself would fail, since running one is the one
+/// thing dry run never does; for that case alone the "would close" line
+/// stands as printed, with nothing extra said about it.
+fn dry_run_plan(
+    address: &str,
+    ws: Option<&Workspace>,
+    create_cmd_redacted: &[String],
+    start_cmd: &[String],
+) -> Result<i32, EstateError> {
+    let close_cmd = match ws {
+        None => None,
+        Some(w) => {
+            if confirm_label_matches(&w.workspace_id, address)? {
+                Some(vec![
+                    "workspace".to_string(),
+                    "close".to_string(),
+                    w.workspace_id.clone(),
+                ])
+            } else {
+                return Err(EstateError::Guard(format!(
+                    "{address}: workspace {} could not be confirmed closed — refusing to create a replacement",
+                    w.workspace_id
+                )));
+            }
+        }
+    };
+    print_plan(create_cmd_redacted, start_cmd, close_cmd.as_deref());
+    Ok(0)
 }
 
 pub fn resume(estates: &toml::Table, address: &str, dry_run: bool) -> Result<i32, EstateError> {
@@ -347,19 +429,12 @@ pub fn resume(estates: &toml::Table, address: &str, dry_run: bool) -> Result<i32
     let ws = check_live_workspace(address)?;
 
     if dry_run {
-        let close_cmd = ws.as_ref().map(|w| {
-            vec![
-                "workspace".to_string(),
-                "close".to_string(),
-                w.workspace_id.clone(),
-            ]
-        });
-        print_plan(
+        return dry_run_plan(
+            address,
+            ws.as_ref(),
             &create_args(&campaign, true),
             &start_cmd,
-            close_cmd.as_deref(),
         );
-        return Ok(0);
     }
 
     let (workspace_id, pane_id) = open_workspace(&campaign, address, ws, &create_cmd, &agent_argv)?;
@@ -391,19 +466,12 @@ pub fn fresh(estates: &toml::Table, address: &str, dry_run: bool) -> Result<i32,
     let ws = check_live_workspace(address)?;
 
     if dry_run {
-        let close_cmd = ws.as_ref().map(|w| {
-            vec![
-                "workspace".to_string(),
-                "close".to_string(),
-                w.workspace_id.clone(),
-            ]
-        });
-        print_plan(
+        return dry_run_plan(
+            address,
+            ws.as_ref(),
             &create_args(&campaign, true),
             &start_cmd,
-            close_cmd.as_deref(),
         );
-        return Ok(0);
     }
 
     let (workspace_id, pane_id) = open_workspace(&campaign, address, ws, &create_cmd, &agent_argv)?;
@@ -643,7 +711,10 @@ mod tests {
         );
         fake.set_response(1, r#"{"result": {}}"#, 0);
         let _g = EnvGuard::set(&[("HERDR_BIN_PATH", fake.bin_path().to_str().unwrap())]);
-        close_if_ours("w1", "home/garden").unwrap();
+        assert_eq!(
+            close_if_ours("w1", "home/garden").unwrap(),
+            CloseOutcome::Closed
+        );
         assert_eq!(fake.call_count(), 2);
         assert_eq!(fake.argv(1), vec!["workspace", "close", "w1"]);
     }
@@ -657,7 +728,10 @@ mod tests {
             0,
         );
         let _g = EnvGuard::set(&[("HERDR_BIN_PATH", fake.bin_path().to_str().unwrap())]);
-        close_if_ours("w1", "home/garden").unwrap();
+        assert_eq!(
+            close_if_ours("w1", "home/garden").unwrap(),
+            CloseOutcome::NotConfirmed
+        );
         assert_eq!(fake.call_count(), 1); // only the get, never the close
     }
 
@@ -996,6 +1070,122 @@ mod tests {
         let err = fresh(&f.estates, "home/garden", false).unwrap_err();
         assert!(matches!(err, EstateError::Guard(msg) if msg.contains("did not create")));
         assert_eq!(f.fake.call_count(), 1);
+    }
+
+    // --- an unconfirmed close stops the verb: never create a
+    // replacement over a workspace that might still be there.
+
+    fn assert_no_create_or_start(fake: &FakeHerdr) {
+        for i in 0..fake.call_count() {
+            let argv = fake.argv(i);
+            assert!(
+                !(argv.first().map(String::as_str) == Some("workspace")
+                    && argv.get(1).map(String::as_str) == Some("create")),
+                "unexpected workspace create in call {i}: {argv:?}"
+            );
+            assert_ne!(
+                argv.first().map(String::as_str),
+                Some("agent"),
+                "unexpected agent call {i}: {argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fresh_stops_when_the_pre_close_get_fails() {
+        let f = make_fixture("claude");
+        continuity::append(&f.cdir, "old-sid").unwrap();
+        let before = continuity::read(&f.cdir);
+        ownership::record("home/garden", "w1").unwrap();
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown"}
+            ]}}"#,
+            0,
+        );
+        f.fake.set_response(1, "", 1); // workspace get fails
+
+        let err = fresh(&f.estates, "home/garden", false).unwrap_err();
+        assert!(matches!(err, EstateError::Guard(msg)
+            if msg.contains("w1") && msg.contains("could not be confirmed closed")));
+        assert_eq!(f.fake.call_count(), 2); // list, get — nothing further
+        assert_no_create_or_start(&f.fake);
+        assert_eq!(continuity::read(&f.cdir), before);
+    }
+
+    #[test]
+    fn fresh_stops_when_the_label_changed_between_list_and_get() {
+        let f = make_fixture("claude");
+        continuity::append(&f.cdir, "old-sid").unwrap();
+        let before = continuity::read(&f.cdir);
+        ownership::record("home/garden", "w1").unwrap();
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown"}
+            ]}}"#,
+            0,
+        );
+        f.fake.set_response(
+            1,
+            r#"{"result": {"workspace": {"label": "someone-elses"}}}"#,
+            0,
+        );
+
+        let err = fresh(&f.estates, "home/garden", false).unwrap_err();
+        assert!(matches!(err, EstateError::Guard(msg)
+            if msg.contains("w1") && msg.contains("could not be confirmed closed")));
+        assert_eq!(f.fake.call_count(), 2);
+        assert_no_create_or_start(&f.fake);
+        assert_eq!(continuity::read(&f.cdir), before);
+    }
+
+    #[test]
+    fn fresh_stops_when_herdr_reports_the_close_itself_failed() {
+        let f = make_fixture("claude");
+        continuity::append(&f.cdir, "old-sid").unwrap();
+        let before = continuity::read(&f.cdir);
+        ownership::record("home/garden", "w1").unwrap();
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown"}
+            ]}}"#,
+            0,
+        );
+        f.fake.set_response(
+            1,
+            r#"{"result": {"workspace": {"label": "home/garden"}}}"#,
+            0,
+        );
+        f.fake.set_response(2, "", 1); // workspace close fails
+
+        let err = fresh(&f.estates, "home/garden", false).unwrap_err();
+        assert!(matches!(err, EstateError::Guard(msg)
+            if msg.contains("w1") && msg.contains("could not be confirmed closed")));
+        assert_eq!(f.fake.call_count(), 3); // list, get, close — no create/start
+        assert_no_create_or_start(&f.fake);
+        assert_eq!(continuity::read(&f.cdir), before);
+    }
+
+    #[test]
+    fn dry_run_stops_when_the_pre_close_get_fails() {
+        let f = make_fixture("claude");
+        ownership::record("home/garden", "w1").unwrap();
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown"}
+            ]}}"#,
+            0,
+        );
+        f.fake.set_response(1, "", 1); // workspace get fails
+
+        let err = fresh(&f.estates, "home/garden", true).unwrap_err();
+        assert!(matches!(err, EstateError::Guard(msg)
+            if msg.contains("w1") && msg.contains("could not be confirmed closed")));
+        assert_eq!(f.fake.call_count(), 2); // the dry run confirms the same way
     }
 
     // --- kind-gated guards: the two Claude-only checks run only when

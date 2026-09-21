@@ -323,12 +323,19 @@ fn fresh_dry_run_close_line_names_the_owned_dormant_workspace() {
         ]}}"#,
         0,
     );
+    // The dry run re-confirms the label the same read-only way the real
+    // close would, before it prints "would close:".
+    f.fake.set_response(
+        1,
+        r#"{"result": {"workspace": {"label": "home/garden"}}}"#,
+        0,
+    );
     let out = run(&f, &["fresh", "home/garden", "--dry-run"], &[]);
     assert!(out.status.success(), "{}", stderr(&out));
     let text = stdout(&out);
     assert!(text.contains("would close:"), "{text}");
     assert!(text.contains("w1"), "{text}");
-    assert_eq!(f.fake.call_count(), 1);
+    assert_eq!(f.fake.call_count(), 2);
 }
 
 #[test]
@@ -343,6 +350,11 @@ fn fresh_dry_run_close_line_shows_even_without_a_recorded_conversation() {
         r#"{"result": {"workspaces": [
             {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown"}
         ]}}"#,
+        0,
+    );
+    f.fake.set_response(
+        1,
+        r#"{"result": {"workspace": {"label": "home/garden"}}}"#,
         0,
     );
     let out = run(&f, &["fresh", "home/garden", "--dry-run"], &[]);
