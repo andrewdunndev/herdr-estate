@@ -16,12 +16,25 @@ use crate::picker::rows;
 /// panic unwinding through the scope that holds it — so raw mode and the
 /// alternate screen are never left behind on any exit path. Constructed
 /// only after `ratatui::try_init` has already succeeded, so a guard is
-/// never live over a terminal `run_interactive` failed to enter.
-struct RestoreGuard;
+/// never live over a terminal `run_interactive` failed to enter (that
+/// path restores directly — see `run_interactive`). The restore
+/// function is a field, not a direct call, so a test can substitute one
+/// and observe that `Drop` actually ran it.
+struct RestoreGuard {
+    restore: fn(),
+}
+
+impl RestoreGuard {
+    fn new() -> Self {
+        RestoreGuard {
+            restore: ratatui::restore,
+        }
+    }
+}
 
 impl Drop for RestoreGuard {
     fn drop(&mut self) {
-        ratatui::restore();
+        (self.restore)();
     }
 }
 
@@ -56,9 +69,20 @@ pub fn run(
 }
 
 fn run_interactive(built_rows: Vec<core::Row>) -> Result<Outcome, EstateError> {
-    let mut terminal = ratatui::try_init()
-        .map_err(|e| EstateError::Protocol(format!("could not start the terminal: {e}")))?;
-    let _guard = RestoreGuard;
+    // `try_init` enables raw mode before entering the alternate screen;
+    // if the second step fails, raw mode is already on with nothing yet
+    // constructed to undo it on drop. Restore directly on this path
+    // rather than leaving the caller's terminal raw.
+    let mut terminal = match ratatui::try_init() {
+        Ok(t) => t,
+        Err(e) => {
+            ratatui::restore();
+            return Err(EstateError::Protocol(format!(
+                "could not start the terminal: {e}"
+            )));
+        }
+    };
+    let _guard = RestoreGuard::new();
     event_loop(&mut terminal, AppState::new(built_rows))
 }
 
@@ -129,6 +153,34 @@ fn translate_key(key: KeyEvent) -> Option<CoreEvent> {
         KeyCode::Enter => Some(CoreEvent::Enter),
         KeyCode::Esc => Some(CoreEvent::Esc),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod restore_guard_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static CALLED: AtomicBool = AtomicBool::new(false);
+
+    fn mark_called() {
+        CALLED.store(true, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn drop_calls_the_restore_function() {
+        // The doc comment promises raw mode and the alternate screen are
+        // never left behind on any exit path — that promise rests on
+        // `Drop::drop` actually running the restore function, which no
+        // test observed before this one substituted a fake for the real
+        // `ratatui::restore`.
+        CALLED.store(false, Ordering::SeqCst);
+        {
+            let _guard = RestoreGuard {
+                restore: mark_called,
+            };
+        }
+        assert!(CALLED.load(Ordering::SeqCst));
     }
 }
 
