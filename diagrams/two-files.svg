@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" role="img" font-family="'IBM Plex Sans', system-ui, sans-serif" aria-label="An address names one estate in the table and one campaign directory inside it, where campaign.md overrides the estate's keys one at a time and sessions.log records every launch beside it.">
+  <defs>
+    <marker id="two-files-arrow" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="7" refX="9" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#404040"/></marker>
+  </defs>
+  <g font-family="'IBM Plex Sans', system-ui, sans-serif">
+    <rect x="20" y="20" width="1160" height="520" rx="6" fill="#ffffff" stroke="#e0e0e0" stroke-width="1"/>
+    <!-- the address -->
+    <text x="48" y="52" font-size="8" fill="#707070" font-family="'IBM Plex Mono', monospace" letter-spacing="0.08em">ADDRESS</text>
+    <text x="48" y="82" font-size="20" fill="#0a0a0a" font-family="'IBM Plex Mono', monospace">home/garden</text>
+    <!-- outer ring: the estate table -->
+    <rect x="44" y="116" width="1112" height="408" rx="4" fill="#f4f4f4" stroke="#707070" stroke-width="1"/>
+    <text x="60" y="138" font-size="8" fill="#707070" font-family="'IBM Plex Mono', monospace" letter-spacing="0.08em">ESTATE</text>
+    <text x="112" y="138" font-size="11" fill="#4a6741" font-family="'IBM Plex Mono', monospace">home</text>
+    <text x="1140" y="138" text-anchor="end" font-size="8" fill="#707070" font-family="'IBM Plex Mono', monospace">estates.toml</text>
+    <!-- the generic estate keys -->
+    <rect x="68" y="154" width="520" height="148" rx="4" fill="#ffffff" stroke="#e0e0e0" stroke-width="1"/>
+    <text x="88" y="174" font-size="8" fill="#707070" font-family="'IBM Plex Mono', monospace" letter-spacing="0.08em">[estate.home]</text>
+    <text x="88" y="198" font-size="10" fill="#0a0a0a" font-family="'IBM Plex Mono', monospace">root</text>
+    <text x="212" y="198" font-size="10" fill="#707070">the repo that holds the campaigns</text>
+    <text x="88" y="216" font-size="10" fill="#0a0a0a" font-family="'IBM Plex Mono', monospace">campaigns</text>
+    <text x="212" y="216" font-size="10" fill="#707070">directory under root</text>
+    <text x="88" y="234" font-size="10" fill="#0a0a0a" font-family="'IBM Plex Mono', monospace">agent</text>
+    <text x="212" y="234" font-size="10" fill="#707070">default herdr agent kind</text>
+    <text x="88" y="252" font-size="10" fill="#0a0a0a" font-family="'IBM Plex Mono', monospace">paths</text>
+    <text x="212" y="252" font-size="10" fill="#707070">added ahead of the campaign's own</text>
+    <text x="88" y="270" font-size="10" fill="#0a0a0a" font-family="'IBM Plex Mono', monospace">prompts</text>
+    <text x="212" y="270" font-size="10" fill="#707070">appended to every agent</text>
+    <text x="88" y="288" font-size="10" fill="#0a0a0a" font-family="'IBM Plex Mono', monospace">env</text>
+    <text x="212" y="288" font-size="10" fill="#707070">exported into every workspace</text>
+    <!-- the per-kind estate table -->
+    <rect x="612" y="154" width="520" height="148" rx="4" fill="#ffffff" stroke="#e0e0e0" stroke-width="1"/>
+    <text x="632" y="174" font-size="8" fill="#707070" font-family="'IBM Plex Mono', monospace" letter-spacing="0.08em">[estate.home.claude]</text>
+    <text x="632" y="200" font-size="11" fill="#404040">per-kind defaults for the whole estate</text>
+    <text x="632" y="226" font-size="10" fill="#0a0a0a" font-family="'IBM Plex Mono', monospace">remote-control = true</text>
+    <text x="632" y="254" font-size="10" fill="#707070">the campaign's own claude: table overrides</text>
+    <text x="632" y="272" font-size="10" fill="#707070">these, including turning one off with false</text>
+    <!-- inner ring: the campaign directory -->
+    <rect x="68" y="330" width="1064" height="178" rx="4" fill="#ffffff" stroke="#707070" stroke-width="1"/>
+    <text x="88" y="350" font-size="8" fill="#707070" font-family="'IBM Plex Mono', monospace" letter-spacing="0.08em">CAMPAIGN</text>
+    <text x="152" y="350" font-size="11" fill="#4a6741" font-family="'IBM Plex Mono', monospace">garden</text>
+    <text x="1112" y="350" text-anchor="end" font-size="8" fill="#707070" font-family="'IBM Plex Mono', monospace">campaigns/garden/</text>
+    <!-- the campaign file, the focal node -->
+    <rect x="92" y="366" width="500" height="124" rx="4" fill="#4a6741"/>
+    <text x="112" y="386" font-size="8" fill="#ffffff" opacity="0.8" font-family="'IBM Plex Mono', monospace" letter-spacing="0.08em">FRONTMATTER</text>
+    <text x="112" y="408" font-size="13" font-weight="600" fill="#ffffff">campaign.md</text>
+    <text x="112" y="430" font-size="9" fill="#ffffff" opacity="0.85" font-family="'IBM Plex Mono', monospace">paths:</text>
+    <text x="196" y="430" font-size="9" fill="#ffffff" opacity="0.85" font-family="'IBM Plex Mono', monospace">agent:</text>
+    <text x="280" y="430" font-size="9" fill="#ffffff" opacity="0.85" font-family="'IBM Plex Mono', monospace">claude:</text>
+    <text x="112" y="452" font-size="10" fill="#ffffff" opacity="0.85">unknown keys are ignored, not rejected</text>
+    <text x="112" y="470" font-size="10" fill="#ffffff" opacity="0.85">generic keys map through a per-kind adapter</text>
+    <!-- the continuity log -->
+    <rect x="616" y="366" width="492" height="124" rx="4" fill="#f4f4f4" stroke="#e0e0e0" stroke-width="1"/>
+    <text x="636" y="386" font-size="8" fill="#707070" font-family="'IBM Plex Mono', monospace" letter-spacing="0.08em">CONTINUITY</text>
+    <text x="636" y="408" font-size="13" font-weight="600" fill="#0a0a0a">sessions.log</text>
+    <text x="636" y="430" font-size="9" fill="#404040" font-family="'IBM Plex Mono', monospace">&lt;timestamp&gt; &lt;hostname&gt; &lt;conversation-id&gt;</text>
+    <text x="636" y="452" font-size="10" fill="#707070">one line per launch, append-only</text>
+    <text x="636" y="470" font-size="10" fill="#707070">resume reads the last line; fresh appends one</text>
+    <!-- the override, reaching out of the campaign into both tables -->
+    <path d="M342,366 V320 H700" fill="none" stroke="#404040" stroke-width="1.5"/>
+    <path d="M342,320 V302" fill="none" stroke="#404040" stroke-width="1.5" marker-end="url(#two-files-arrow)"/>
+    <path d="M700,320 V302" fill="none" stroke="#404040" stroke-width="1.5" marker-end="url(#two-files-arrow)"/>
+    <rect x="463" y="313" width="116" height="15" fill="#f4f4f4"/>
+    <text x="521" y="324" text-anchor="middle" font-size="8" fill="#404040" font-family="'IBM Plex Mono', monospace">overrides key by key</text>
+  </g>
+</svg>
