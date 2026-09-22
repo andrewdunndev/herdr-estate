@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The `pick` action opens the picker popup. herdr runs an action with
+  no terminal, so a key bound to it failed with "could not start the
+  terminal". The README binds it to `prefix+shift+e`, a key herdr
+  leaves free; its old suggestions `prefix+r` and `prefix+p` shadowed
+  herdr's `resize_mode` and `previous_tab`.
 - `resume` and `fresh` print a line to stderr before each step that
   changes the board, including the wait while `agent start` blocks
   until the agent is ready, so the picker popup no longer sits blank

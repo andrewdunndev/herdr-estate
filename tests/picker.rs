@@ -1,5 +1,6 @@
 //! Integration tests for `herdr-estate pick`: the `--render-once` golden
-//! frame and the "no half-true list" error path. The interactive TUI
+//! frame, the "no half-true list" error path, and the `pick` action
+//! opening the popup rather than drawing. The interactive TUI
 //! itself needs a real terminal, so it is tried by hand in a herdr popup;
 //! this file covers everything reachable without a TTY.
 //!
@@ -73,6 +74,21 @@ impl FakeHerdr {
             exit_code.to_string(),
         )
         .unwrap();
+    }
+
+    fn call_count(&self) -> usize {
+        std::fs::read_to_string(self.dir.join("calls").join("count"))
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0)
+    }
+
+    fn argv(&self, index: usize) -> Vec<String> {
+        std::fs::read_to_string(self.dir.join("calls").join(format!("{index}.argv")))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
     }
 }
 
@@ -239,4 +255,46 @@ fn pick_rejects_an_unknown_flag() {
     let (f, _root) = fixture();
     let out = run(&f, &["pick", "--nope"]);
     assert_eq!(out.status.code(), Some(2));
+}
+
+#[test]
+fn the_pick_action_opens_the_popup_instead_of_drawing() {
+    // How herdr runs the `pick` action from a key: no terminal, with
+    // HERDR_PLUGIN_ACTION_ID set. It must ask herdr for the picker pane,
+    // not try to draw (which failed with "could not start the terminal").
+    let (f, _root) = fixture();
+    f.fake.set_response(0, r#"{"result": {}}"#, 0);
+    let out = Command::new(env!("CARGO_BIN_EXE_herdr-estate"))
+        .arg("pick")
+        .env_clear()
+        .env("HOME", &f.home)
+        .env("HERDR_PLUGIN_CONFIG_DIR", &f.config_dir)
+        .env("HERDR_PLUGIN_STATE_DIR", &f.state_dir)
+        .env("HERDR_BIN_PATH", f.fake.bin_path())
+        .env("HERDR_PLUGIN_ID", "herdr-estate")
+        .env("HERDR_PLUGIN_ACTION_ID", "pick")
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .expect("run the built herdr-estate binary");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(f.fake.call_count(), 1);
+    assert_eq!(
+        f.fake.argv(0),
+        vec![
+            "plugin",
+            "pane",
+            "open",
+            "--plugin",
+            "herdr-estate",
+            "--entrypoint",
+            "picker"
+        ]
+    );
+    assert!(stderr(&out).contains("herdr-estate: opening the picker popup"));
+    let events = std::fs::read_to_string(f.state_dir.join("events.log")).unwrap();
+    assert!(events
+        .lines()
+        .next()
+        .unwrap()
+        .ends_with(" run: herdr-estate pick (herdr action pick)"));
 }

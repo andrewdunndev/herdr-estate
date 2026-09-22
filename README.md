@@ -26,20 +26,17 @@ herdr plugin link /path/to/herdr-estate
 the manifest's `[[build]]` table, so the binary needs to exist before
 you link it. Rebuilding after a source change takes effect on herdr's
 next invocation, no relink needed. `herdr plugin install` (a GitHub
-install, not dev mode) runs `[[build]]` itself. Then bind the actions
-to keys in your own `~/.config/herdr/config.toml`:
+install, not dev mode) runs `[[build]]` itself. Then bind the picker
+to a key herdr leaves free, in your own `~/.config/herdr/config.toml`:
 
 ```toml
 [[keys.command]]
-key = "prefix+r"
+key = "prefix+shift+e"
 type = "plugin_action"
-command = "herdr-estate.resume"
-
-[[keys.command]]
-key = "prefix+f"
-type = "plugin_action"
-command = "herdr-estate.fresh"
+command = "herdr-estate.pick"
 ```
+
+`resume` and `fresh` are actions too, bound the same way.
 
 ## The two files
 
@@ -160,22 +157,15 @@ time and routed through the same verb functions and guards, never
 trusted from the drawn list. When the filter matches nothing, the
 picker shows "no match" and Enter does nothing.
 
-Open it as a popup over the active pane:
+It opens as a popup over the active pane, from the key bound above or
+by hand:
 
 ```sh
 herdr plugin pane open --plugin herdr-estate --entrypoint picker
 ```
 
-or bind a key to the `pick` action in your own
-`~/.config/herdr/config.toml`, the same way `resume`/`fresh` are bound
-above:
-
-```toml
-[[keys.command]]
-key = "prefix+p"
-type = "plugin_action"
-command = "herdr-estate.pick"
-```
+herdr runs an action with no terminal, so the `pick` action makes that
+same call rather than drawing.
 
 `herdr-estate pick --render-once --width <W> --height <H>` prints a
 single frame as plain text, with no terminal needed (defaults to 80x20).

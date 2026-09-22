@@ -2,7 +2,8 @@
 //! guard. Dispatch of the row Enter selects lives in `crate::dispatch`,
 //! not here — this module only drives the event loop, hands the chosen
 //! row off once the terminal is already restored, and holds a failed
-//! dispatch's error on screen until a key press.
+//! dispatch's error on screen until a key press. Run as a herdr action,
+//! with no terminal to drive, it opens the picker popup instead.
 
 use std::io::Write;
 use std::time::Duration;
@@ -11,6 +12,8 @@ use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind
 
 use crate::dispatch;
 use crate::errors::EstateError;
+use crate::herdrcli;
+use crate::paths::non_empty_env;
 use crate::picker::core::{self, AppState, Event as CoreEvent, Outcome};
 use crate::picker::rows;
 use crate::progress;
@@ -39,6 +42,46 @@ impl Drop for RestoreGuard {
     fn drop(&mut self) {
         (self.restore)();
     }
+}
+
+/// The plugin id and pane entrypoint `herdr-plugin.toml` declares for
+/// the popup picker (a test holds this to the manifest).
+pub const PLUGIN_ID: &str = "herdr-estate";
+pub const PICKER_ENTRYPOINT: &str = "picker";
+
+/// Whether this `pick` opens the picker popup instead of drawing. herdr
+/// runs a plugin action with no terminal, so a key bound to the `pick`
+/// action has nothing to draw in and used to fail with "could not start
+/// the terminal". The popup entrypoint gets one. A process that is
+/// itself the entrypoint never re-opens it, whatever else is set, so the
+/// popup can't open itself in a loop.
+pub fn opens_popup_instead_of_drawing(render_once: bool) -> bool {
+    !render_once
+        && non_empty_env("HERDR_PLUGIN_ACTION_ID").is_some()
+        && non_empty_env("HERDR_PLUGIN_ENTRYPOINT_ID").is_none()
+}
+
+/// Open the picker entrypoint as a popup over the active pane, the call
+/// `herdr plugin pane open --plugin herdr-estate --entrypoint picker`
+/// makes by hand. That popup runs `pick` again, with a terminal.
+/// `$HERDR_PLUGIN_ID` names the plugin when herdr set it, so an install
+/// under another id still opens its own pane.
+pub fn open_popup() -> Result<i32, EstateError> {
+    let plugin_id = non_empty_env("HERDR_PLUGIN_ID").unwrap_or_else(|| PLUGIN_ID.to_string());
+    progress::step("opening the picker popup");
+    herdrcli::call_herdr(
+        &[
+            "plugin".to_string(),
+            "pane".to_string(),
+            "open".to_string(),
+            "--plugin".to_string(),
+            plugin_id,
+            "--entrypoint".to_string(),
+            PICKER_ENTRYPOINT.to_string(),
+        ],
+        true,
+    )?;
+    Ok(0)
 }
 
 /// Build the row list, then either print one static frame
@@ -594,5 +637,141 @@ mod translate_key_tests {
         let mut key = press(KeyCode::Enter, KeyModifiers::NONE);
         key.kind = KeyEventKind::Release;
         assert!(translate_key(key).is_none());
+    }
+}
+
+#[cfg(test)]
+mod popup_tests {
+    use super::*;
+    use crate::test_support::{EnvGuard, FakeHerdr, TempDir};
+
+    const LAUNCH_VARS: [&str; 3] = [
+        "HERDR_PLUGIN_ACTION_ID",
+        "HERDR_PLUGIN_ENTRYPOINT_ID",
+        "HERDR_PLUGIN_ID",
+    ];
+
+    /// Set exactly `sets` among herdr's launch variables, unsetting the
+    /// rest, under one guard.
+    fn launched_with(sets: &[(&str, &str)]) -> EnvGuard {
+        let unsets: Vec<&str> = LAUNCH_VARS
+            .iter()
+            .copied()
+            .filter(|k| !sets.iter().any(|(s, _)| s == k))
+            .collect();
+        EnvGuard::new(sets, &unsets)
+    }
+
+    #[test]
+    fn a_pick_run_as_a_herdr_action_opens_the_popup() {
+        let _g = launched_with(&[("HERDR_PLUGIN_ACTION_ID", "pick")]);
+        assert!(opens_popup_instead_of_drawing(false));
+    }
+
+    #[test]
+    fn the_popup_entrypoint_itself_draws_and_never_reopens() {
+        let _g = launched_with(&[
+            ("HERDR_PLUGIN_ACTION_ID", "pick"),
+            ("HERDR_PLUGIN_ENTRYPOINT_ID", "picker"),
+        ]);
+        assert!(!opens_popup_instead_of_drawing(false));
+    }
+
+    #[test]
+    fn a_shell_run_draws() {
+        let _g = launched_with(&[]);
+        assert!(!opens_popup_instead_of_drawing(false));
+    }
+
+    #[test]
+    fn render_once_never_opens_a_popup_even_as_an_action() {
+        let _g = launched_with(&[("HERDR_PLUGIN_ACTION_ID", "pick")]);
+        assert!(!opens_popup_instead_of_drawing(true));
+    }
+
+    fn popup_fixture(plugin_id: Option<&str>) -> (TempDir, FakeHerdr, EnvGuard) {
+        let d = TempDir::new();
+        let fake = FakeHerdr::new();
+        let state = d.path().join("state");
+        let mut sets = vec![
+            (
+                "HERDR_BIN_PATH",
+                fake.bin_path().to_str().unwrap().to_string(),
+            ),
+            (
+                "HERDR_PLUGIN_STATE_DIR",
+                state.to_str().unwrap().to_string(),
+            ),
+        ];
+        if let Some(id) = plugin_id {
+            sets.push(("HERDR_PLUGIN_ID", id.to_string()));
+        }
+        let sets: Vec<(&str, &str)> = sets.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let unsets: &[&str] = if plugin_id.is_some() {
+            &[]
+        } else {
+            &["HERDR_PLUGIN_ID"]
+        };
+        let g = EnvGuard::new(&sets, unsets);
+        (d, fake, g)
+    }
+
+    #[test]
+    fn open_popup_asks_herdr_for_the_picker_pane_and_says_so() {
+        let (_d, fake, _g) = popup_fixture(None);
+        fake.set_response(0, r#"{"result": {}}"#, 0);
+        assert_eq!(open_popup().unwrap(), 0);
+        assert_eq!(fake.call_count(), 1);
+        assert_eq!(
+            fake.argv(0),
+            vec![
+                "plugin",
+                "pane",
+                "open",
+                "--plugin",
+                "herdr-estate",
+                "--entrypoint",
+                "picker"
+            ]
+        );
+        assert_eq!(
+            crate::progress::logged_messages(),
+            vec!["opening the picker popup"]
+        );
+    }
+
+    #[test]
+    fn open_popup_uses_the_plugin_id_herdr_set() {
+        let (_d, fake, _g) = popup_fixture(Some("estate-dev"));
+        fake.set_response(0, r#"{"result": {}}"#, 0);
+        open_popup().unwrap();
+        assert_eq!(fake.argv(0)[4], "estate-dev");
+    }
+
+    #[test]
+    fn open_popup_fails_when_herdr_refuses_the_pane() {
+        let (_d, fake, _g) = popup_fixture(None);
+        fake.set_response(0, "", 1);
+        assert!(matches!(open_popup(), Err(EstateError::Protocol(_))));
+    }
+
+    #[test]
+    fn the_plugin_id_and_entrypoint_match_the_manifest() {
+        // A rename in herdr-plugin.toml that missed these constants
+        // would leave the action opening a pane herdr doesn't know.
+        let manifest: toml::Table =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/herdr-plugin.toml"))
+                .unwrap()
+                .parse()
+                .unwrap();
+        assert_eq!(manifest["id"].as_str(), Some(PLUGIN_ID));
+        let panes = manifest["panes"].as_array().unwrap();
+        let picker = panes
+            .iter()
+            .find(|p| p["id"].as_str() == Some(PICKER_ENTRYPOINT))
+            .expect("a [[panes]] entry with the picker's id");
+        assert_eq!(picker["placement"].as_str(), Some("popup"));
+        let actions = manifest["actions"].as_array().unwrap();
+        assert!(actions.iter().any(|a| a["id"].as_str() == Some("pick")));
     }
 }

@@ -169,6 +169,11 @@ fn dispatch(cmd: Command) -> Result<i32, EstateError> {
             width,
             height,
         } => {
+            // Checked before the estate table is read: the popup this
+            // opens runs `pick` again and reads it there.
+            if picker::shell::opens_popup_instead_of_drawing(render_once) {
+                return picker::shell::open_popup();
+            }
             let estates = config::load_estates(None)?;
             picker::shell::run(&estates, render_once, width, height)
         }
@@ -181,8 +186,9 @@ fn dispatch(cmd: Command) -> Result<i32, EstateError> {
 /// a usage error in the arguments themselves.
 pub fn run(argv: &[String]) -> i32 {
     // Every run opens with one log line naming its argv and how herdr
-    // started it: the same `pick` argv draws in a popup and fails as an
-    // action, and the log should say which one ran.
+    // started it: the same `pick` argv draws in the popup and, run as
+    // an action, opens that popup instead, and the log should say which
+    // one ran.
     progress::append(&format!(
         "run: herdr-estate {} ({})",
         argv.join(" "),
