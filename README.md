@@ -129,9 +129,9 @@ after. No other variable is touched.
 - `herdr-estate fresh [<address>]`: retire the latest conversation and
   start a new one in the same space.
 - `herdr-estate list`: list every campaign the estate table knows.
-- `--dry-run` prints the plan for `resume`/`fresh` and requires an
-  explicit `<address>`, since deriving one from the current workspace
-  is itself a herdr call.
+- `--dry-run` prints the plan for `resume`/`fresh`. It makes the same
+  read calls, so every guard applies, and it creates, closes or starts
+  nothing. It requires an explicit `<address>`.
 
 Run as a herdr plugin action with no address, `<address>` is derived
 from the current workspace's label.
