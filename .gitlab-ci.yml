@@ -39,6 +39,10 @@ include:
     inputs:
       package_name: herdr-estate
 
+  # Tag-only: SLSA provenance for each binary, signed keyless through
+  # GitLab OIDC. Same template every other release in the estate wires.
+  - component: gitlab.com/dunn.dev/pipeline/slsa-attest@4.6.0
+
   # Tag-only: GitLab Release from the annotated tag's message,
   # binaries + SBOMs linked as assets. Idempotent across reruns.
   - component: gitlab.com/dunn.dev/pipeline/release-create@4.6.0
