@@ -55,8 +55,36 @@ impl std::fmt::Display for HerdrError {
             ""
         };
         let detail: String = raw.trim().chars().take(300).collect();
-        write!(f, "herdr {} failed: {detail}", self.herdr_args.join(" "))
+        write!(
+            f,
+            "herdr {} failed: {detail}",
+            redacted_args(&self.herdr_args).join(" ")
+        )
     }
+}
+
+/// What a masked `--env` value reads as, in a `--dry-run` plan and in a
+/// failed call's message alike.
+pub const ENV_VALUE_MASK: &str = "<from estates.toml>";
+
+/// `args` for display, with the value of every `--env KEY=VALUE` masked.
+/// A failed `workspace create` carries the estate's env values in its
+/// argv, and this message reaches stderr, the popup and events.log. Empty
+/// values (the scrub entries) and `HERDR_ESTATE_ADDRESS`, which is
+/// derived rather than configured, stay in the clear.
+fn redacted_args(args: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut after_env = false;
+    for a in args {
+        out.push(match a.split_once('=') {
+            Some((k, v)) if after_env && !v.is_empty() && k != "HERDR_ESTATE_ADDRESS" => {
+                format!("{k}={ENV_VALUE_MASK}")
+            }
+            _ => a.clone(),
+        });
+        after_env = a == "--env";
+    }
+    out
 }
 
 impl std::error::Error for HerdrError {}
@@ -393,6 +421,61 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, EstateError::Protocol(_)));
+    }
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_failed_call_message_masks_every_configured_env_value() {
+        let e = HerdrError {
+            herdr_args: args(&[
+                "workspace",
+                "create",
+                "--label",
+                "home/garden",
+                "--env",
+                "HERDR_ESTATE_ADDRESS=home/garden",
+                "--env",
+                "ANTHROPIC_API_KEY=",
+                "--env",
+                "SECRET_TOKEN=sk-do-not-log",
+            ]),
+            returncode: 1,
+            stderr: "boom".to_string(),
+            stdout: String::new(),
+        };
+        assert_eq!(
+            e.to_string(),
+            "herdr workspace create --label home/garden \
+             --env HERDR_ESTATE_ADDRESS=home/garden --env ANTHROPIC_API_KEY= \
+             --env SECRET_TOKEN=<from estates.toml> failed: boom"
+        );
+    }
+
+    #[test]
+    fn redaction_touches_only_the_argument_after_an_env_flag() {
+        // An `=` in any other argument (a path, an agent flag) is not an
+        // env pair and stays as it is.
+        assert_eq!(
+            redacted_args(&args(&[
+                "--cwd",
+                "/a=b",
+                "--",
+                "--flag=value",
+                "--env",
+                "K=V"
+            ])),
+            args(&[
+                "--cwd",
+                "/a=b",
+                "--",
+                "--flag=value",
+                "--env",
+                "K=<from estates.toml>"
+            ])
+        );
     }
 
     #[test]

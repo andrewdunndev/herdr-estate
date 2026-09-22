@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- `resume` and `fresh` print a line to stderr before each step that
+  changes the board, including the wait while `agent start` blocks
+  until the agent is ready, so the picker popup no longer sits blank
+  through it.
+- A failed dispatch from the picker holds its error in the popup until
+  a key press instead of closing with it. Keys typed during the wait
+  are discarded first, so they can't dismiss it unread.
+- A failed herdr call's message masks estate `env` values, as a
+  `--dry-run` plan does. A failed `workspace create` used to print them
+  in the clear.
+- Every run appends its argv, how it was launched, its progress lines
+  and any error to `events.log` in the state dir: one timestamped
+  record across the picker popup, plugin actions and the shell.
+
 ## v0.1.0
 
 First release. A herdr plugin that gives agent work a durable address:

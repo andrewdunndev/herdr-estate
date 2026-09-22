@@ -1,8 +1,10 @@
 //! Crossterm events into core events, ratatui drawing, and the terminal
 //! guard. Dispatch of the row Enter selects lives in `crate::dispatch`,
-//! not here — this module only drives the event loop and hands the
-//! chosen row off once the terminal is already restored.
+//! not here — this module only drives the event loop, hands the chosen
+//! row off once the terminal is already restored, and holds a failed
+//! dispatch's error on screen until a key press.
 
+use std::io::Write;
 use std::time::Duration;
 
 use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -11,6 +13,7 @@ use crate::dispatch;
 use crate::errors::EstateError;
 use crate::picker::core::{self, AppState, Event as CoreEvent, Outcome};
 use crate::picker::rows;
+use crate::progress;
 
 /// Restores the terminal on drop — normal return, an early `?`, or a
 /// panic unwinding through the scope that holds it — so raw mode and the
@@ -61,9 +64,75 @@ pub fn run(
 
     match run_interactive(built_rows)? {
         Outcome::Cancelled => Ok(0),
-        Outcome::Selected(row) => {
-            dispatch::open_row(estates, &row)?;
-            Ok(0)
+        // Dispatch runs on the restored terminal, so its progress lines
+        // show in the popup while `agent start` waits. A failure is held
+        // on screen: the popup closes the moment this process exits, and
+        // an error returned straight to `cli::run` would print into a
+        // pane that is already gone.
+        Outcome::Selected(row) => match dispatch::open_row(estates, &row) {
+            Ok(()) => Ok(0),
+            Err(e) => Ok(report_and_hold(
+                &e,
+                &mut CrosstermEvents,
+                &CROSSTERM_RAW_MODE,
+            )),
+        },
+    }
+}
+
+/// Raw mode on and off. Crossterm's in production; a test substitutes
+/// recorders, the same seam `RestoreGuard::restore` is.
+struct RawMode {
+    enable: fn() -> std::io::Result<()>,
+    disable: fn() -> std::io::Result<()>,
+}
+
+const CROSSTERM_RAW_MODE: RawMode = RawMode {
+    enable: crossterm::terminal::enable_raw_mode,
+    disable: crossterm::terminal::disable_raw_mode,
+};
+
+/// A failed dispatch, kept readable: report it (stderr and the log),
+/// then hold the popup open until a key press, since the popup closes
+/// the moment this process exits. Raw mode, so a single key ends it with
+/// no Enter. Returns 1, the code `cli::run` gives the same error.
+/// Best-effort: a terminal that refuses raw mode or a read that fails
+/// skips the wait rather than hanging the popup.
+fn report_and_hold(err: &EstateError, events: &mut impl EventSource, raw: &RawMode) -> i32 {
+    progress::report_error(err);
+    let _ = writeln!(std::io::stderr(), "press any key to close");
+    let raw_on = (raw.enable)().is_ok();
+    drain_pending(events);
+    wait_for_press(events);
+    if raw_on {
+        let _ = (raw.disable)();
+    }
+    1
+}
+
+/// Throw away input typed before the error showed. Keys pressed while
+/// `agent start` blocked sit in the tty's queue (the terminal was
+/// restored to cooked mode for dispatch, and entering raw mode does not
+/// flush it), and the first of them would end the hold before the error
+/// could be read. Runs after raw mode is on, so a partial line typed in
+/// cooked mode is readable too.
+fn drain_pending(events: &mut impl EventSource) {
+    while matches!(events.poll(Duration::ZERO), Ok(true)) {
+        if events.read().is_err() {
+            break;
+        }
+    }
+}
+
+/// Read until a key press: a resize, a key release or repeat, or any
+/// other event is not the operator answering, so it keeps waiting. A
+/// read error ends the wait.
+fn wait_for_press(events: &mut impl EventSource) {
+    loop {
+        match events.read() {
+            Ok(TermEvent::Key(key)) if key.kind == KeyEventKind::Press => return,
+            Ok(_) => continue,
+            Err(_) => return,
         }
     }
 }
@@ -298,6 +367,107 @@ mod event_loop_tests {
                 state: RowState::New,
             })
         );
+    }
+
+    // --- wait_for_press: the hold after a failed dispatch ---
+
+    #[test]
+    fn the_error_hold_waits_through_a_resize_and_a_release_and_ends_on_the_first_press() {
+        let mut release = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        release.kind = KeyEventKind::Release;
+        let mut events = ScriptedEvents::new(vec![
+            Scripted::Event(TermEvent::Resize(80, 24)),
+            Scripted::Event(TermEvent::Key(release)),
+            Scripted::Event(key_press(KeyCode::Esc)),
+            Scripted::Event(key_press(KeyCode::Enter)),
+        ]);
+        wait_for_press(&mut events);
+        // Stopped at the Esc press: the Enter after it is never read.
+        assert_eq!(events.0.len(), 1);
+    }
+
+    #[test]
+    fn a_failed_dispatch_is_logged_and_held_past_keys_typed_during_the_wait() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static ON: AtomicUsize = AtomicUsize::new(0);
+        static OFF: AtomicUsize = AtomicUsize::new(0);
+        fn on() -> std::io::Result<()> {
+            ON.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn off() -> std::io::Result<()> {
+            // Raw mode goes off only after it went on.
+            assert_eq!(ON.load(Ordering::SeqCst), 1);
+            OFF.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        let d = crate::test_support::TempDir::new();
+        let _g = crate::test_support::EnvGuard::set(&[(
+            "HERDR_PLUGIN_STATE_DIR",
+            d.path().to_str().unwrap(),
+        )]);
+        // An Enter typed while `agent start` blocked is already queued
+        // when the hold begins; the drain throws it away (the NoEvent
+        // is the queue running dry), and only the Esc after it — the
+        // operator answering the error — ends the hold.
+        let mut events = ScriptedEvents::new(vec![
+            Scripted::Event(key_press(KeyCode::Enter)),
+            Scripted::NoEvent,
+            Scripted::Event(key_press(KeyCode::Esc)),
+        ]);
+        let err = EstateError::Guard("home/garden: refused".to_string());
+        let raw = RawMode {
+            enable: on,
+            disable: off,
+        };
+        assert_eq!(report_and_hold(&err, &mut events, &raw), 1);
+        assert!(events.0.is_empty());
+        assert_eq!(ON.load(Ordering::SeqCst), 1);
+        assert_eq!(OFF.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            crate::progress::logged_messages(),
+            vec!["error: home/garden: refused"]
+        );
+    }
+
+    #[test]
+    fn a_terminal_that_refuses_raw_mode_still_holds_and_is_never_switched_back() {
+        fn refuse() -> std::io::Result<()> {
+            Err(std::io::Error::other("no tty"))
+        }
+        fn must_not_run() -> std::io::Result<()> {
+            panic!("raw mode was never on, so it must not be turned off")
+        }
+        let d = crate::test_support::TempDir::new();
+        let _g = crate::test_support::EnvGuard::set(&[(
+            "HERDR_PLUGIN_STATE_DIR",
+            d.path().to_str().unwrap(),
+        )]);
+        let mut events = ScriptedEvents::new(vec![
+            Scripted::NoEvent,
+            Scripted::Event(key_press(KeyCode::Char('q'))),
+        ]);
+        let raw = RawMode {
+            enable: refuse,
+            disable: must_not_run,
+        };
+        let err = EstateError::Protocol("herdr agent start failed".to_string());
+        assert_eq!(report_and_hold(&err, &mut events, &raw), 1);
+        assert!(events.0.is_empty());
+    }
+
+    #[test]
+    fn the_error_hold_ends_on_a_read_error_instead_of_hanging() {
+        struct FailingRead;
+        impl EventSource for FailingRead {
+            fn poll(&mut self, _timeout: Duration) -> std::io::Result<bool> {
+                unreachable!("wait_for_press only reads")
+            }
+            fn read(&mut self) -> std::io::Result<TermEvent> {
+                Err(std::io::Error::other("tty gone"))
+            }
+        }
+        wait_for_press(&mut FailingRead);
     }
 }
 

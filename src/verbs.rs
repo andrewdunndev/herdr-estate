@@ -28,6 +28,7 @@ use crate::doubleopen;
 use crate::errors::EstateError;
 use crate::herdrcli::{self, HerdrResult, Workspace, WorkspaceCreateResult, WorkspaceGetResult};
 use crate::ownership;
+use crate::progress;
 use crate::prompt;
 use crate::verb::Verb;
 
@@ -90,7 +91,7 @@ pub fn create_args(campaign: &Campaign, redact: bool) -> Vec<String> {
     }
     for (k, v) in &campaign.env {
         let shown = if redact {
-            "<from estates.toml>".to_string()
+            herdrcli::ENV_VALUE_MASK.to_string()
         } else {
             v.clone()
         };
@@ -318,6 +319,10 @@ fn open_workspace(
         prompt::write_prompt(&campaign.estate, &campaign.name, &campaign.prompt_files)?;
     }
     if let Some(ws) = ws {
+        progress::step(&format!(
+            "{address}: closing {}, which herdr-estate opened and whose agent has exited",
+            ws.workspace_id
+        ));
         match close_if_ours(&ws.workspace_id, address)? {
             CloseOutcome::Closed => {
                 ownership::forget(&ws.workspace_id).map_err(|e| {
@@ -332,12 +337,28 @@ fn open_workspace(
             }
         }
     }
+    progress::step(&format!("{address}: creating a workspace"));
     let created = herdrcli::call_herdr(create_cmd, true)?;
     let (workspace_id, pane_id) = created_ids(&created)?;
     ownership::record(address, &workspace_id)
         .map_err(|e| EstateError::Config(format!("could not update the ownership record: {e}")))?;
+    // `agent start` returns only once herdr sees the agent ready for
+    // input: several seconds for claude, the whole wait the picker popup
+    // otherwise sat blank through.
+    let kind = campaign.kind.as_str();
+    progress::step(&format!(
+        "{address}: starting {kind} in {workspace_id}, waiting up to {}s for it to be ready",
+        agent_start_timeout_secs()
+    ));
     herdrcli::call_herdr(&start_args(campaign, &pane_id, agent_argv), true)?;
+    progress::step(&format!("{address}: {kind} is ready in {workspace_id}"));
     Ok((workspace_id, pane_id))
+}
+
+/// `AGENT_START_TIMEOUT_MS` in whole seconds, for the progress line that
+/// says how long the start may take.
+fn agent_start_timeout_secs() -> u64 {
+    AGENT_START_TIMEOUT_MS.parse::<u64>().unwrap_or(0) / 1000
 }
 
 /// A `/dev/urandom`-backed v4 UUID — the crate's dependency budget has no
@@ -460,6 +481,10 @@ pub(crate) fn resume_with_ids(
         });
     }
 
+    progress::step(&format!(
+        "{address}: resuming conversation {}...",
+        short(&conversation_id)
+    ));
     let (workspace_id, pane_id) = open_workspace(&campaign, address, ws, &create_cmd, &agent_argv)?;
     println!(
         "live  {address}  {workspace_id}  {pane_id}  [{}...]",
@@ -512,6 +537,10 @@ pub(crate) fn fresh_with_ids(
         });
     }
 
+    progress::step(&format!(
+        "{address}: starting fresh conversation {}...",
+        short(&new_id)
+    ));
     let (workspace_id, pane_id) = open_workspace(&campaign, address, ws, &create_cmd, &agent_argv)?;
     continuity::append(&campaign.dir, &new_id)
         .map_err(|e| EstateError::Config(format!("could not append to the continuity log: {e}")))?;
@@ -945,6 +974,117 @@ mod tests {
         assert_eq!(continuity::read(&f.cdir).len(), 1);
     }
 
+    /// A persisted transcript for `sid`, which the claude-kind resume
+    /// guard requires before it will start anything.
+    fn write_transcript(sid: &str) {
+        let proj = crate::paths::home_dir()
+            .join(".claude")
+            .join("projects")
+            .join("p");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(proj.join(format!("{sid}.jsonl")), "{}\n").unwrap();
+    }
+
+    #[test]
+    fn resume_says_each_step_in_order() {
+        let f = make_fixture("claude");
+        continuity::append(&f.cdir, "old-sid-0000").unwrap();
+        write_transcript("old-sid-0000");
+        f.fake.set_response(0, empty_list(), 0);
+        f.fake.set_response(1, CREATE_OK, 0);
+        f.fake.set_response(2, r#"{"result": {}}"#, 0);
+
+        resume(&f.estates, "home/garden", false).unwrap();
+        assert_eq!(
+            progress::logged_messages(),
+            vec![
+                "home/garden: resuming conversation old-sid-...",
+                "home/garden: creating a workspace",
+                "home/garden: starting claude in w9, waiting up to 30s for it to be ready",
+                "home/garden: claude is ready in w9",
+            ]
+        );
+    }
+
+    #[test]
+    fn fresh_over_an_owned_dead_workspace_says_it_is_closing_it_first() {
+        let f = make_fixture("claude");
+        ownership::record("home/garden", "w1").unwrap();
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown"}
+            ]}}"#,
+            0,
+        );
+        f.fake.set_response(
+            1,
+            r#"{"result": {"workspace": {"label": "home/garden"}}}"#,
+            0,
+        );
+        f.fake.set_response(2, r#"{"result": {}}"#, 0); // close
+        f.fake.set_response(3, CREATE_OK, 0);
+        f.fake.set_response(4, r#"{"result": {}}"#, 0);
+
+        fresh(&f.estates, "home/garden", false).unwrap();
+        let logged = progress::logged_messages();
+        assert_eq!(logged.len(), 5);
+        assert!(logged[0].starts_with("home/garden: starting fresh conversation "));
+        assert_eq!(
+            logged[1],
+            "home/garden: closing w1, which herdr-estate opened and whose agent has exited"
+        );
+        assert_eq!(logged[2], "home/garden: creating a workspace");
+        assert_eq!(logged[4], "home/garden: claude is ready in w9");
+    }
+
+    #[test]
+    fn a_failed_agent_start_never_says_the_agent_is_ready() {
+        let f = make_fixture("claude");
+        f.fake.set_response(0, empty_list(), 0);
+        f.fake.set_response(1, CREATE_OK, 0);
+        f.fake
+            .set_response(2, r#"{"error": {"code": "timeout"}}"#, 1); // agent start
+
+        assert!(fresh(&f.estates, "home/garden", false).is_err());
+        let logged = progress::logged_messages();
+        assert!(logged
+            .last()
+            .unwrap()
+            .starts_with("home/garden: starting claude in w9"));
+        assert!(!logged.iter().any(|m| m.contains("is ready")));
+    }
+
+    #[test]
+    fn a_dry_run_and_a_guard_refusal_both_log_nothing() {
+        let f = make_fixture("claude");
+        continuity::append(&f.cdir, "old-sid").unwrap();
+        write_transcript("old-sid");
+        f.fake.set_response(0, empty_list(), 0);
+        resume(&f.estates, "home/garden", true).unwrap();
+        assert!(progress::logged_messages().is_empty());
+
+        // A running agent under the label: refused before any step.
+        f.fake.set_response(
+            1,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "idle"}
+            ]}}"#,
+            0,
+        );
+        assert!(resume(&f.estates, "home/garden", false).is_err());
+        assert!(progress::logged_messages().is_empty());
+    }
+
+    #[test]
+    fn agent_start_timeout_secs_is_the_millisecond_constant_in_seconds() {
+        assert_eq!(
+            agent_start_timeout_secs(),
+            AGENT_START_TIMEOUT_MS.parse::<u64>().unwrap() / 1000
+        );
+        assert_eq!(agent_start_timeout_secs(), 30);
+    }
+
     #[test]
     fn resume_with_no_recorded_conversation_falls_back_to_fresh() {
         let f = make_fixture("claude");
@@ -1217,6 +1357,13 @@ mod tests {
         assert_eq!(f.fake.call_count(), 2);
         assert_no_create_or_start(&f.fake);
         assert_eq!(continuity::read(&f.cdir), before);
+        // The one refusal that comes after a progress line: the close
+        // was announced, then refused, and nothing after it claims a
+        // create or a start.
+        let logged = progress::logged_messages();
+        assert_eq!(logged.len(), 2);
+        assert!(logged[0].starts_with("home/garden: starting fresh conversation "));
+        assert!(logged[1].starts_with("home/garden: closing w1"));
     }
 
     #[test]

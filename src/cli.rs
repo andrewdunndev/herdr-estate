@@ -3,6 +3,7 @@
 use crate::config;
 use crate::errors::EstateError;
 use crate::picker;
+use crate::progress;
 use crate::verbs;
 
 /// Default popup size for `pick`: the width/height an 80x20 popup pane
@@ -179,17 +180,26 @@ fn dispatch(cmd: Command) -> Result<i32, EstateError> {
 /// `EstateError` (printed as `herdr-estate: <message>` to stderr), 2 on
 /// a usage error in the arguments themselves.
 pub fn run(argv: &[String]) -> i32 {
+    // Every run opens with one log line naming its argv and how herdr
+    // started it: the same `pick` argv draws in a popup and fails as an
+    // action, and the log should say which one ran.
+    progress::append(&format!(
+        "run: herdr-estate {} ({})",
+        argv.join(" "),
+        progress::launched_via()
+    ));
     let cmd = match parse_args(argv) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("herdr-estate: error: {}", e.message);
+            progress::append(&format!("error: {}", e.message));
             return 2;
         }
     };
     match dispatch(cmd) {
         Ok(rc) => rc,
         Err(e) => {
-            eprintln!("herdr-estate: {e}");
+            progress::report_error(&e);
             1
         }
     }
@@ -331,13 +341,56 @@ mod tests {
         assert!(matches!(err, EstateError::Usage(_)));
     }
 
+    /// `run` logs every invocation, so each in-process `run` test points
+    /// the state dir at a scratch dir first (`progress::append` fails a
+    /// test that doesn't).
+    fn scratch_state() -> (crate::test_support::TempDir, crate::test_support::EnvGuard) {
+        let d = crate::test_support::TempDir::new();
+        let g = crate::test_support::EnvGuard::new(
+            &[("HERDR_PLUGIN_STATE_DIR", d.path().to_str().unwrap())],
+            &["HERDR_PLUGIN_ACTION_ID", "HERDR_PLUGIN_ENTRYPOINT_ID"],
+        );
+        (d, g)
+    }
+
     #[test]
     fn run_missing_verb_exits_2() {
+        let _s = scratch_state();
         assert_eq!(run(&[]), 2);
     }
 
     #[test]
-    fn run_unknown_verb_exits_2() {
+    fn run_unknown_verb_exits_2_and_logs_the_run_and_the_error() {
+        let _s = scratch_state();
         assert_eq!(run(&args(&["launch"])), 2);
+        let logged = progress::logged_messages();
+        assert_eq!(logged.len(), 2);
+        assert_eq!(logged[0], "run: herdr-estate launch (shell)");
+        assert!(logged[1].starts_with("error: "));
+    }
+
+    #[test]
+    fn run_logs_a_handled_error_before_exiting_1() {
+        // `list` over a malformed estates.toml: a config error, the
+        // exit-1 path, which must leave its message in the log. One
+        // EnvGuard for every variable — a second live guard would
+        // deadlock on the shared lock.
+        let d = crate::test_support::TempDir::new();
+        let cfg = d.path().join("config");
+        std::fs::create_dir_all(&cfg).unwrap();
+        std::fs::write(cfg.join("estates.toml"), "not = [valid").unwrap();
+        let state = d.path().join("state");
+        let _g = crate::test_support::EnvGuard::new(
+            &[
+                ("HERDR_PLUGIN_STATE_DIR", state.to_str().unwrap()),
+                ("HERDR_PLUGIN_CONFIG_DIR", cfg.to_str().unwrap()),
+            ],
+            &["HERDR_PLUGIN_ACTION_ID", "HERDR_PLUGIN_ENTRYPOINT_ID"],
+        );
+        assert_eq!(run(&args(&["list"])), 1);
+        let logged = progress::logged_messages();
+        assert_eq!(logged.len(), 2);
+        assert_eq!(logged[0], "run: herdr-estate list (shell)");
+        assert!(logged[1].starts_with("error: "));
     }
 }

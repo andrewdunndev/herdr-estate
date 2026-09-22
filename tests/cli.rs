@@ -275,6 +275,52 @@ fn fresh_happy_path_creates_starts_and_logs() {
 
     let log = std::fs::read_to_string(root.join("campaigns/garden/sessions.log")).unwrap();
     assert_eq!(log.lines().count(), 1);
+
+    // The progress lines go to stderr, never stdout, which scripts read.
+    let err = stderr(&out);
+    assert!(err.contains("herdr-estate: home/garden: creating a workspace"));
+    assert!(err.contains("herdr-estate: home/garden: starting claude in w9"));
+    assert!(err.contains("herdr-estate: home/garden: claude is ready in w9"));
+    assert!(!stdout(&out).contains("creating a workspace"));
+
+    let events = std::fs::read_to_string(f.state_dir.join("events.log")).unwrap();
+    let first = events.lines().next().unwrap();
+    assert!(first.ends_with(" run: herdr-estate fresh home/garden (shell)"));
+    assert!(events
+        .lines()
+        .last()
+        .unwrap()
+        .ends_with("claude is ready in w9"));
+}
+
+#[test]
+fn a_failed_create_keeps_estate_env_values_out_of_stderr_and_the_event_log() {
+    let (f, root) = fixture();
+    make_campaign(&root, "garden", "---\n---\n");
+    write_estate_toml(
+        &f.config_dir,
+        &format!(
+            "[estate.home]\nroot = {:?}\n[estate.home.env]\nSECRET_TOKEN = \"sk-do-not-print-me\"\n",
+            root.to_string_lossy()
+        ),
+    );
+    f.fake
+        .set_response(0, r#"{"result": {"workspaces": []}}"#, 0);
+    f.fake.set_response(1, "", 1); // workspace create fails
+
+    let out = run(&f, &["fresh", "home/garden"], &[]);
+    assert_eq!(out.status.code(), Some(1));
+    // The real value did go to herdr; only what is shown is masked.
+    assert!(f
+        .fake
+        .argv(1)
+        .contains(&"SECRET_TOKEN=sk-do-not-print-me".to_string()));
+    let err = stderr(&out);
+    assert!(err.contains("SECRET_TOKEN=<from estates.toml>"), "{err}");
+    assert!(!err.contains("sk-do-not-print-me"));
+    let events = std::fs::read_to_string(f.state_dir.join("events.log")).unwrap();
+    assert!(events.contains("error: herdr workspace create"));
+    assert!(!events.contains("sk-do-not-print-me"));
 }
 
 #[test]

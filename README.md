@@ -136,6 +136,9 @@ after. No other variable is touched.
 Run as a herdr plugin action with no address, `<address>` is derived
 from the current workspace's label.
 
+Both verbs print each step to stderr, and every run appends to
+`events.log`; see [docs/events.md](docs/events.md).
+
 ## Picker
 
 `herdr-estate pick` lists every campaign of every estate the table

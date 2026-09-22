@@ -14,6 +14,7 @@ pub mod herdrcli;
 pub mod ownership;
 pub mod paths;
 pub mod picker;
+pub mod progress;
 pub mod prompt;
 pub mod verb;
 pub mod verbs;

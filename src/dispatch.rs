@@ -15,6 +15,7 @@ use crate::doubleopen;
 use crate::errors::EstateError;
 use crate::herdrcli;
 use crate::picker::core::{Row, RowState};
+use crate::progress;
 use crate::verbs;
 
 /// Act on the selected row, then focus whatever workspace ends up
@@ -32,7 +33,13 @@ pub fn open_row(estates: &toml::Table, row: &Row) -> Result<(), EstateError> {
         // the close-and-recreate decision and the duplicate-label
         // refusal, exactly as it does for a `Dormant` row.
         RowState::Live { .. } => match doubleopen::live_workspace(&row.address)? {
-            Some(ws) if doubleopen::workspace_alive(&ws) => ws.workspace_id,
+            Some(ws) if doubleopen::workspace_alive(&ws) => {
+                progress::step(&format!(
+                    "{}: already running in {}",
+                    row.address, ws.workspace_id
+                ));
+                ws.workspace_id
+            }
             _ => {
                 let result = verbs::resume_with_ids(estates, &row.address, false)?;
                 result.workspace_id.ok_or_else(|| {
@@ -62,6 +69,7 @@ pub fn open_row(estates: &toml::Table, row: &Row) -> Result<(), EstateError> {
             })?
         }
     };
+    progress::step(&format!("{}: focusing {workspace_id}", row.address));
     herdrcli::call_herdr(
         &["workspace".to_string(), "focus".to_string(), workspace_id],
         true,
@@ -163,6 +171,13 @@ mod tests {
         assert_eq!(f.fake.call_count(), 2);
         assert_eq!(f.fake.argv(0), vec!["workspace", "list"]);
         assert_eq!(f.fake.argv(1), vec!["workspace", "focus", "w9"]);
+        assert_eq!(
+            crate::progress::logged_messages(),
+            vec![
+                "home/garden: already running in w9",
+                "home/garden: focusing w9",
+            ]
+        );
     }
 
     #[test]
@@ -260,6 +275,9 @@ mod tests {
         let err = open_row(&f.estates, &row).unwrap_err();
         assert!(matches!(err, EstateError::Guard(_)));
         assert_eq!(f.fake.call_count(), 1); // only the workspace list probe
+
+        // Refused before any step: nothing claims a start or a focus.
+        assert!(crate::progress::logged_messages().is_empty());
     }
 
     #[test]
