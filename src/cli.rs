@@ -6,9 +6,9 @@ use crate::picker;
 use crate::progress;
 use crate::verbs;
 
-/// Default popup size for `pick`: the width/height an 80x20 popup pane
-/// suits, and what `--render-once` renders at with no `--width`/
-/// `--height` override.
+/// What `--render-once` renders at with no `--width`/`--height`
+/// override: 80x20, a small terminal. The popup itself is sized by the
+/// manifest as a share of the window and redraws to whatever it gets.
 pub const PICK_DEFAULT_WIDTH: usize = 80;
 pub const PICK_DEFAULT_HEIGHT: usize = 20;
 

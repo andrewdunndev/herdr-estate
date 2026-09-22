@@ -771,6 +771,19 @@ mod popup_tests {
             .find(|p| p["id"].as_str() == Some(PICKER_ENTRYPOINT))
             .expect("a [[panes]] entry with the picker's id");
         assert_eq!(picker["placement"].as_str(), Some("popup"));
+        // A share of the window, not fixed cells, so the popup follows
+        // the window when it is resized.
+        for dim in ["width", "height"] {
+            let v = picker[dim].as_str().unwrap_or("");
+            let pct: u32 = v
+                .strip_suffix('%')
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0);
+            assert!(
+                (1..100).contains(&pct),
+                "popup {dim} {v:?} is not a percentage under 100%"
+            );
+        }
         let actions = manifest["actions"].as_array().unwrap();
         assert!(actions.iter().any(|a| a["id"].as_str() == Some("pick")));
     }
