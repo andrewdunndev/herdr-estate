@@ -8,9 +8,8 @@ herdr-estate is a plugin for the [herdr](https://herdr.dev) terminal
 workspace manager. It gives herdr *estates* and *campaigns*: durable
 threads of agent work, addressed as `estate/campaign`, that resume
 where they left off instead of starting cold every time. The plugin
-owns exactly two files, an estate table and a per-campaign frontmatter
-block, plus a continuity log it reads and writes itself; herdr's own
-resume is never used.
+owns two files plus a continuity log it reads and writes itself;
+herdr's own resume is never used.
 
 Brand artifacts (`avatar.svg`, `hero.svg`, `favicon.svg`, `brand.png`)
 are not shipped yet; see `.deviations.yaml`.
@@ -45,22 +44,24 @@ command = "herdr-estate.fresh"
 
 ## The two files
 
+![An address names one estate table and one campaign directory inside it, where campaign.md overrides the estate's keys one at a time.](diagrams/two-files.svg)
+
 **The estate table**, `estates.toml`, lives at
 `$HERDR_PLUGIN_CONFIG_DIR/estates.toml` when herdr sets that (running as
 a plugin action), or `~/.config/herdr-estate/estates.toml` for a bare
-shell invocation. One `[estate.<name>]` table per estate:
+shell invocation:
 
 ```toml
 [estate.home]
-root = "~/estates/home"        # the repo that holds the campaigns
-campaigns = "campaigns"        # directory under root
-agent = "claude"               # default herdr agent kind
-paths = ["~/code"]             # extra directories, added before each campaign's own
-prompts = ["prompts/base.md"]  # appended to every agent
-env = { }                      # exported into every workspace
+root = "~/estates/home"
+campaigns = "campaigns"
+agent = "claude"
+paths = ["~/code"]
+prompts = ["prompts/base.md"]
+env = { }
 
 [estate.home.claude]
-remote-control = true          # default for every campaign in this estate
+remote-control = true
 ```
 
 A relative `prompts` entry resolves against the estate's `root`, not the
@@ -68,39 +69,27 @@ directory herdr-estate happens to run from; `~` and `$VAR` expand
 first, so an absolute or `~`-prefixed entry is unaffected. See
 [`examples/estates.toml`](examples/estates.toml).
 
-An estate's `paths` list is added ahead of each campaign's own list,
-with a path repeated in both (after expansion) kept once; a
-`[estate.<name>.<kind>]` table such as `[estate.home.claude]` sets
-per-kind defaults for the whole estate that a campaign's own `claude:`
-table overrides key by key, including turning a default off with an
-explicit `false`.
-
 **The campaign file**, `campaigns/<name>/campaign.md`, carries YAML
-frontmatter: generic keys plus one table per agent kind for flags only
-that kind understands.
+frontmatter:
 
 ```yaml
 paths: [~/code/a, ~/code/b]   # extra directories the agent may work in
-agent: claude                 # optional, overrides the estate default
-claude:                       # flags only this agent kind understands
+agent: claude
+claude:
   remote-control: true
   mcp-config: .mcp.json
 ```
 
-Unknown keys are ignored, not rejected, so an existing campaign file
-keeps working after this plugin starts reading it. Generic keys map
-through a small per-kind adapter (shipped: `claude`); a kind with no
-adapter starts with no mapped flags and prints one warning line. A
-relative `paths` entry resolves against the estate's `root`, the same
-rule `prompts` follows above. See
-[`docs/vocabulary.md`](docs/vocabulary.md) for the six words this
-plugin uses and what each one means.
+The shipped adapter is `claude`; a kind with no adapter starts with no
+mapped flags and prints one warning line. A relative `paths` entry
+resolves against the estate's `root`, the same rule `prompts` follows
+above, and a path listed by both the estate and the campaign is kept
+once. See [`docs/vocabulary.md`](docs/vocabulary.md) for the words this
+plugin uses.
 
-Continuity itself lives in `campaigns/<name>/sessions.log`: one line
-per conversation, an ISO-8601 UTC timestamp, the hostname that opened
-it, and the conversation id, space-separated. `resume` reads the last
-line; `fresh` appends a new one. A campaign with no recorded
-conversation resumes as fresh, and says so.
+Continuity lives in `campaigns/<name>/sessions.log`, its timestamp
+ISO-8601 UTC and its fields space-separated. A campaign with no
+recorded conversation resumes as fresh, and says so.
 
 ## Worktrees (optional)
 
@@ -134,23 +123,19 @@ after. No other variable is touched.
 
 ## The verbs
 
+![Both verbs read the workspace list first and refuse on a duplicate label, a running agent, a workspace they did not create, or a close they cannot confirm.](diagrams/verbs.svg)
+
 - `herdr-estate resume [<address>]`: continue the campaign's latest
   conversation in a new workspace.
 - `herdr-estate fresh [<address>]`: retire the latest conversation and
-  start a new one in the same space; closes the campaign's existing
-  workspace first, but only once a live check confirms it's still ours.
-  If that close cannot be confirmed, the verb stops instead of creating
-  a second workspace under the same address. If more than one workspace
-  already carries the address, both verbs refuse and name them for you
-  to close by hand.
+  start a new one in the same space.
 - `herdr-estate list`: list every campaign the estate table knows.
-- `--dry-run` on `resume`/`fresh` prints the exact herdr commands and
-  agent argv that would run and exits 0 without calling herdr; it
-  requires an explicit `<address>`, since deriving one from the current
-  workspace is itself a herdr call.
+- `--dry-run` prints the plan for `resume`/`fresh` and requires an
+  explicit `<address>`, since deriving one from the current workspace
+  is itself a herdr call.
 
-`<address>` is `estate/campaign`. Run as a herdr plugin action with no
-address, it's derived from the current workspace's label.
+Run as a herdr plugin action with no address, `<address>` is derived
+from the current workspace's label.
 
 ## Picker
 
@@ -166,11 +151,12 @@ knows, one row per address, in a small terminal UI:
 Rows sort live first, then dormant by most recent, then new. Type to
 filter by substring on the address; up/down or ctrl-p/ctrl-n move the
 selection; Esc or ctrl-c quits without doing anything. Enter acts on the
-selected row through the same `resume`/`fresh` verbs above, so every
-guard they enforce applies here too: live focuses the existing
-workspace, dormant resumes the campaign and then focuses the workspace
-it opens, new does the same through `fresh`. When the filter matches
-nothing, the picker shows "no match" and Enter does nothing.
+selected row: live focuses the existing workspace, dormant resumes the
+campaign and then focuses the workspace it opens, new does the same
+through `fresh`. On Enter the row's workspace is read again at dispatch
+time and routed through the same verb functions and guards, never
+trusted from the drawn list. When the filter matches nothing, the
+picker shows "no match" and Enter does nothing.
 
 Open it as a popup over the active pane:
 
