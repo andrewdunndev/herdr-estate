@@ -1,8 +1,7 @@
 //! Integration tests for `herdr-estate pick`: the `--render-once` golden
 //! frame and the "no half-true list" error path. The interactive TUI
-//! itself needs a real terminal, so it is exercised separately by
-//! `tests/pty_smoke.py` (see that file for why it is not a `#[test]`
-//! here) — this file covers everything reachable without a TTY.
+//! itself needs a real terminal, so it is tried by hand in a herdr popup;
+//! this file covers everything reachable without a TTY.
 //!
 //! Same fixture shape as `tests/cli.rs`: each test spawns the compiled
 //! binary with its own `env_clear()`'d environment, `HERDR_BIN_PATH`
