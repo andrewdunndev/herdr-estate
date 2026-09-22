@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="estate-map: site / homepage / parent index.">
+  <g stroke="#4a6741" fill="none" stroke-linecap="round">
+    <rect x="10" y="10" width="44" height="44" stroke-width="1.8" rx="1"/>
+    <line x1="10" y1="32" x2="54" y2="32" stroke-width="1.2"/>
+    <line x1="32" y1="10" x2="32" y2="54" stroke-width="1.2"/>
+  </g>
+  <rect x="14" y="14" width="14" height="14" fill="#4a6741"/>
+  <rect x="36" y="36" width="14" height="14" fill="#4a6741"/>
+</svg>

@@ -1,3 +1,5 @@
+![hero](hero.svg)
+
 # dunn.dev/herdr-estate
 
 [![pipeline](https://gitlab.com/dunn.dev/herdr-estate/badges/main/pipeline.svg)](https://gitlab.com/dunn.dev/herdr-estate/-/pipelines)
@@ -10,9 +12,6 @@ threads of agent work, addressed as `estate/campaign`, that resume
 where they left off instead of starting cold every time. The plugin
 owns two files plus a continuity log it reads and writes itself;
 herdr's own resume is never used.
-
-Brand artifacts (`avatar.svg`, `hero.svg`, `favicon.svg`, `brand.png`)
-are not shipped yet; see `.deviations.yaml`.
 
 ## Install
 
