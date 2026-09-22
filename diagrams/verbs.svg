@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 880" role="img" font-family="'IBM Plex Sans', system-ui, sans-serif" aria-label="Both verbs read the workspace list first, refuse on a duplicate label, a running agent, a workspace they did not create, or a close they cannot confirm, and only create a workspace and start the agent when nothing is in the way.">
+  <defs>
+    <marker id="verbs-arrow" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="7" refX="9" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#404040"/></marker>
+    <marker id="verbs-arrow-moss" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="7" refX="9" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#4a6741"/></marker>
+  </defs>
+  <g font-family="'IBM Plex Sans', system-ui, sans-serif">
+    <rect x="20" y="20" width="1160" height="840" rx="6" fill="#ffffff" stroke="#e0e0e0" stroke-width="1"/>
+    <!-- connectors, drawn under every node -->
+    <path d="M330,108 V124" fill="none" stroke="#404040" stroke-width="1.5"/>
+    <path d="M510,108 V124" fill="none" stroke="#404040" stroke-width="1.5"/>
+    <path d="M330,124 H510" fill="none" stroke="#404040" stroke-width="1.5"/>
+    <path d="M420,124 V154" fill="none" stroke="#404040" stroke-width="1.5" marker-end="url(#verbs-arrow)"/>
+    <path d="M420,202 V230" fill="none" stroke="#404040" stroke-width="1.5" marker-end="url(#verbs-arrow)"/>
+    <path d="M304,276 H234" fill="none" stroke="#404040" stroke-width="1.5" marker-end="url(#verbs-arrow)"/>
+    <path d="M420,322 V364" fill="none" stroke="#404040" stroke-width="1.5" marker-end="url(#verbs-arrow)"/>
+    <path d="M310,410 H234" fill="none" stroke="#404040" stroke-width="1.5" marker-end="url(#verbs-arrow)"/>
+    <path d="M420,456 V498" fill="none" stroke="#404040" stroke-width="1.5" marker-end="url(#verbs-arrow)"/>
+    <path d="M310,544 H234" fill="none" stroke="#404040" stroke-width="1.5" marker-end="url(#verbs-arrow)"/>
+    <path d="M530,544 H790" fill="none" stroke="#404040" stroke-width="1.5" marker-end="url(#verbs-arrow)"/>
+    <path d="M880,568 V614" fill="none" stroke="#404040" stroke-width="1.5" marker-end="url(#verbs-arrow)"/>
+    <path d="M770,660 H700" fill="none" stroke="#404040" stroke-width="1.5" marker-end="url(#verbs-arrow)"/>
+    <path d="M880,706 V740" fill="none" stroke="#4a6741" stroke-width="1.5" marker-end="url(#verbs-arrow-moss)"/>
+    <path d="M536,276 H1100 V772 H1020" fill="none" stroke="#4a6741" stroke-width="1.5" marker-end="url(#verbs-arrow-moss)"/>
+    <!-- the two verbs -->
+    <rect x="250" y="44" width="160" height="64" rx="4" fill="#f4f4f4" stroke="#e0e0e0" stroke-width="1"/>
+    <text x="266" y="64" font-size="8" fill="#707070" font-family="'IBM Plex Mono', monospace" letter-spacing="0.08em">VERB</text>
+    <text x="266" y="84" font-size="13" font-weight="600" fill="#0a0a0a">resume</text>
+    <text x="266" y="100" font-size="9" fill="#404040" font-family="'IBM Plex Mono', monospace">sessions.log, last line</text>
+    <rect x="430" y="44" width="160" height="64" rx="4" fill="#f4f4f4" stroke="#e0e0e0" stroke-width="1"/>
+    <text x="446" y="64" font-size="8" fill="#707070" font-family="'IBM Plex Mono', monospace" letter-spacing="0.08em">VERB</text>
+    <text x="446" y="84" font-size="13" font-weight="600" fill="#0a0a0a">fresh</text>
+    <text x="446" y="100" font-size="9" fill="#404040" font-family="'IBM Plex Mono', monospace">a new conversation id</text>
+    <!-- the one read both verbs make -->
+    <rect x="330" y="154" width="180" height="48" rx="4" fill="#f4f4f4" stroke="#e0e0e0" stroke-width="1"/>
+    <text x="420" y="174" text-anchor="middle" font-size="8" fill="#707070" font-family="'IBM Plex Mono', monospace" letter-spacing="0.08em">READ</text>
+    <text x="420" y="194" text-anchor="middle" font-size="13" font-weight="600" fill="#0a0a0a">workspace list</text>
+    <!-- guard: duplicate labels -->
+    <polygon points="420,230 536,276 420,322 304,276" fill="#f4f4f4" stroke="#707070" stroke-width="1"/>
+    <text x="420" y="272" text-anchor="middle" font-size="12" font-weight="600" fill="#0a0a0a">how many?</text>
+    <text x="420" y="290" text-anchor="middle" font-size="9" fill="#404040" font-family="'IBM Plex Mono', monospace">carry the address</text>
+    <ellipse cx="140" cy="276" rx="94" ry="26" fill="#ffffff" stroke="#e0e0e0" stroke-width="1"/>
+    <text x="140" y="272" text-anchor="middle" font-size="12" font-weight="600" fill="#0a0a0a">refuse</text>
+    <text x="140" y="290" text-anchor="middle" font-size="9" fill="#404040" font-family="'IBM Plex Mono', monospace">and name the ids</text>
+    <!-- guard: a running agent -->
+    <polygon points="420,364 530,410 420,456 310,410" fill="#f4f4f4" stroke="#707070" stroke-width="1"/>
+    <text x="420" y="406" text-anchor="middle" font-size="12" font-weight="600" fill="#0a0a0a">agent alive?</text>
+    <text x="420" y="424" text-anchor="middle" font-size="9" fill="#404040" font-family="'IBM Plex Mono', monospace">status != unknown</text>
+    <ellipse cx="140" cy="410" rx="94" ry="26" fill="#ffffff" stroke="#e0e0e0" stroke-width="1"/>
+    <text x="140" y="406" text-anchor="middle" font-size="12" font-weight="600" fill="#0a0a0a">refuse</text>
+    <text x="140" y="424" text-anchor="middle" font-size="9" fill="#404040" font-family="'IBM Plex Mono', monospace">it is still working</text>
+    <!-- guard: ownership -->
+    <polygon points="420,498 530,544 420,590 310,544" fill="#f4f4f4" stroke="#707070" stroke-width="1"/>
+    <text x="420" y="540" text-anchor="middle" font-size="12" font-weight="600" fill="#0a0a0a">did we make it?</text>
+    <text x="420" y="558" text-anchor="middle" font-size="9" fill="#404040" font-family="'IBM Plex Mono', monospace">ownership record</text>
+    <ellipse cx="140" cy="544" rx="94" ry="26" fill="#ffffff" stroke="#e0e0e0" stroke-width="1"/>
+    <text x="140" y="540" text-anchor="middle" font-size="12" font-weight="600" fill="#0a0a0a">refuse</text>
+    <text x="140" y="558" text-anchor="middle" font-size="9" fill="#404040" font-family="'IBM Plex Mono', monospace">close it yourself</text>
+    <!-- close, then confirm -->
+    <rect x="790" y="520" width="180" height="48" rx="4" fill="#f4f4f4" stroke="#e0e0e0" stroke-width="1"/>
+    <text x="880" y="540" text-anchor="middle" font-size="8" fill="#707070" font-family="'IBM Plex Mono', monospace" letter-spacing="0.08em">CLOSE</text>
+    <text x="880" y="560" text-anchor="middle" font-size="13" font-weight="600" fill="#0a0a0a">the workspace</text>
+    <polygon points="880,614 990,660 880,706 770,660" fill="#f4f4f4" stroke="#707070" stroke-width="1"/>
+    <text x="880" y="656" text-anchor="middle" font-size="12" font-weight="600" fill="#0a0a0a">confirmed?</text>
+    <text x="880" y="674" text-anchor="middle" font-size="9" fill="#404040" font-family="'IBM Plex Mono', monospace">the label still matches</text>
+    <ellipse cx="590" cy="660" rx="110" ry="26" fill="#ffffff" stroke="#e0e0e0" stroke-width="1"/>
+    <text x="590" y="656" text-anchor="middle" font-size="12" font-weight="600" fill="#0a0a0a">stop</text>
+    <text x="590" y="674" text-anchor="middle" font-size="9" fill="#404040" font-family="'IBM Plex Mono', monospace">and create nothing</text>
+    <!-- the one way through -->
+    <rect x="740" y="740" width="280" height="84" rx="4" fill="#4a6741"/>
+    <text x="880" y="762" text-anchor="middle" font-size="8" fill="#ffffff" opacity="0.8" font-family="'IBM Plex Mono', monospace" letter-spacing="0.08em">CREATE</text>
+    <text x="880" y="782" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">workspace, then agent</text>
+    <text x="880" y="800" text-anchor="middle" font-size="9" fill="#ffffff" opacity="0.85" font-family="'IBM Plex Mono', monospace">the new id is recorded as ours</text>
+    <text x="880" y="816" text-anchor="middle" font-size="9" fill="#ffffff" opacity="0.85" font-family="'IBM Plex Mono', monospace">fresh appends a continuity line</text>
+    <!-- the dry run: the same reads, none of the writes -->
+    <rect x="60" y="736" width="420" height="88" rx="4" fill="#ffffff" stroke="#707070" stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="80" y="758" font-size="8" fill="#707070" font-family="'IBM Plex Mono', monospace" letter-spacing="0.08em">DRY RUN</text>
+    <text x="80" y="780" font-size="12" fill="#0a0a0a" font-family="'IBM Plex Mono', monospace">--dry-run</text>
+    <text x="80" y="802" font-size="10" fill="#707070">every check above still runs, so the plan and the refusals</text>
+    <text x="80" y="818" font-size="10" fill="#707070">match a real run; nothing is created, closed or started</text>
+    <!-- branch labels -->
+    <rect x="236" y="258" width="70" height="14" fill="#ffffff"/>
+    <text x="271" y="269" text-anchor="middle" font-size="8" fill="#404040" font-family="'IBM Plex Mono', monospace">more than one</text>
+    <rect x="557" y="258" width="34" height="14" fill="#ffffff"/>
+    <text x="574" y="269" text-anchor="middle" font-size="8" fill="#404040" font-family="'IBM Plex Mono', monospace">none</text>
+    <rect x="429" y="336" width="68" height="14" fill="#ffffff"/>
+    <text x="463" y="347" text-anchor="middle" font-size="8" fill="#404040" font-family="'IBM Plex Mono', monospace">exactly one</text>
+    <rect x="262" y="392" width="22" height="14" fill="#ffffff"/>
+    <text x="273" y="403" text-anchor="middle" font-size="8" fill="#404040" font-family="'IBM Plex Mono', monospace">yes</text>
+    <rect x="429" y="470" width="20" height="14" fill="#ffffff"/>
+    <text x="439" y="481" text-anchor="middle" font-size="8" fill="#404040" font-family="'IBM Plex Mono', monospace">no</text>
+    <rect x="263" y="526" width="20" height="14" fill="#ffffff"/>
+    <text x="273" y="537" text-anchor="middle" font-size="8" fill="#404040" font-family="'IBM Plex Mono', monospace">no</text>
+    <rect x="644" y="526" width="22" height="14" fill="#ffffff"/>
+    <text x="655" y="537" text-anchor="middle" font-size="8" fill="#404040" font-family="'IBM Plex Mono', monospace">yes</text>
+    <rect x="724" y="642" width="20" height="14" fill="#ffffff"/>
+    <text x="734" y="653" text-anchor="middle" font-size="8" fill="#404040" font-family="'IBM Plex Mono', monospace">no</text>
+    <rect x="889" y="716" width="22" height="14" fill="#ffffff"/>
+    <text x="900" y="727" text-anchor="middle" font-size="8" fill="#4a6741" font-family="'IBM Plex Mono', monospace">yes</text>
+  </g>
+</svg>
