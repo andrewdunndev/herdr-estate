@@ -207,11 +207,10 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-Unit tests cover pure logic. Everything that crosses the herdr CLI
-boundary is exercised against a fake `herdr` executable, pointed to by
-`$HERDR_BIN_PATH`, that records its exact argv and environment per call
-and replays canned responses, so a test asserts what herdr was actually
-asked to do rather than that a mock was called. The integration suite
-in `tests/cli.rs` drives the built binary itself: subcommands,
-`--dry-run`, exit codes, and address derivation from
+Unit tests cover pure logic. Everything crossing the herdr CLI
+boundary runs against a fake `herdr` executable (`$HERDR_BIN_PATH`)
+that records each call's argv and environment and replays canned
+responses, so tests assert what herdr was actually asked to do. The
+integration suite in `tests/cli.rs` drives the built binary itself:
+subcommands, `--dry-run`, exit codes, and address derivation from
 `$HERDR_WORKSPACE_ID`.
