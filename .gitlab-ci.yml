@@ -8,6 +8,8 @@ workflow:
 stages:
   - lint
   - build
+  - package
+  - release
 
 include:
   # cargo fmt --check + cargo clippy -D warnings via the catalog's
@@ -18,3 +20,27 @@ include:
   - component: gitlab.com/dunn.dev/pipeline/rust-build@4.6.0
     inputs:
       package_path: .
+
+  # cargo-audit vulnerability scan (allow_failure: true, catalog default).
+  - component: gitlab.com/dunn.dev/pipeline/rust-audit@4.6.0
+
+  # Tag-only: cross-compile linux/amd64, linux/arm64, darwin/arm64
+  # (cargo-zigbuild + baked macOS SDK, no Mac runner needed), cosign
+  # keyless-sign, upload to the package registry. Fixed 3-target
+  # matrix satisfies herdr-plugin.toml's platforms=["macos","linux"]
+  # with no target-selection input to set.
+  - component: gitlab.com/dunn.dev/pipeline/rust-release-binary@4.6.0
+    inputs:
+      binary_name: herdr-estate
+      package_name: herdr-estate
+
+  # Tag-only: CycloneDX SBOM per binary via syft.
+  - component: gitlab.com/dunn.dev/pipeline/rust-sbom@4.6.0
+    inputs:
+      package_name: herdr-estate
+
+  # Tag-only: GitLab Release from the annotated tag's message,
+  # binaries + SBOMs linked as assets. Idempotent across reruns.
+  - component: gitlab.com/dunn.dev/pipeline/release-create@4.6.0
+    inputs:
+      package_name: herdr-estate
