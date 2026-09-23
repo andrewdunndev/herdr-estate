@@ -537,8 +537,14 @@ pub(crate) fn fresh_with_ids(
         });
     }
 
+    // Name what fresh retires, so the log says which conversation to
+    // go back to by hand: sessions.log keeps it, but nothing else does.
+    let retiring = old_id
+        .as_deref()
+        .map(|old| format!(", retiring {}...", short(old)))
+        .unwrap_or_default();
     progress::step(&format!(
-        "{address}: starting fresh conversation {}...",
+        "{address}: starting fresh conversation {}...{retiring}",
         short(&new_id)
     ));
     let (workspace_id, pane_id) = open_workspace(&campaign, address, ws, &create_cmd, &agent_argv)?;
@@ -558,6 +564,9 @@ pub(crate) fn fresh_with_ids(
 pub struct CampaignRow {
     pub address: String,
     pub last: String,
+    /// `frontmatter::brief` of its campaign.md, for the picker only
+    /// (`format_row` leaves it out); empty when that file can't be read.
+    pub brief: String,
 }
 
 pub fn list_campaigns(estates: &toml::Table) -> Vec<CampaignRow> {
@@ -602,7 +611,14 @@ pub fn list_campaigns(estates: &toml::Table) -> Vec<CampaignRow> {
                 .and_then(|l| l.split_whitespace().next())
                 .map(|s| s.chars().take(10).collect::<String>())
                 .unwrap_or_default();
-            rows.push(CampaignRow { address, last });
+            let brief = std::fs::read_to_string(cdir.join("campaign.md"))
+                .map(|text| crate::frontmatter::brief(&text))
+                .unwrap_or_default();
+            rows.push(CampaignRow {
+                address,
+                last,
+                brief,
+            });
         }
     }
     rows
@@ -1206,6 +1222,20 @@ mod tests {
         );
         assert!(!ownership::is_ours("w1"));
         assert!(ownership::is_ours("w9"));
+        // The step names the conversation fresh retired.
+        assert!(progress::logged_messages()[0].ends_with("..., retiring old-sid..."));
+    }
+
+    #[test]
+    fn fresh_with_no_recorded_conversation_names_nothing_retired() {
+        let f = make_fixture("claude");
+        f.fake.set_response(0, empty_list(), 0);
+        f.fake.set_response(1, CREATE_OK, 0);
+        f.fake.set_response(2, r#"{"result": {}}"#, 0);
+        fresh(&f.estates, "home/garden", false).unwrap();
+        let first = &progress::logged_messages()[0];
+        assert!(first.starts_with("home/garden: starting fresh conversation "));
+        assert!(!first.contains("retiring"));
     }
 
     #[test]
@@ -1542,8 +1572,13 @@ mod tests {
         let taxes = root.join("campaigns").join("taxes");
         std::fs::create_dir_all(&garden).unwrap();
         std::fs::create_dir_all(&taxes).unwrap();
-        std::fs::write(garden.join("campaign.md"), "---\n---\n").unwrap();
-        std::fs::write(taxes.join("campaign.md"), "---\n---\n").unwrap();
+        std::fs::write(
+            garden.join("campaign.md"),
+            "---\n---\n# garden\nGrow beds.\n",
+        )
+        .unwrap();
+        // Not UTF-8, so unreadable as text: still listed, with no brief.
+        std::fs::write(taxes.join("campaign.md"), b"---\n---\n\xff\n").unwrap();
         continuity::append(&garden, "sid").unwrap();
 
         let mut row = toml::Table::new();
@@ -1562,6 +1597,8 @@ mod tests {
         let taxes_row = rows.iter().find(|r| r.address == "home/taxes").unwrap();
         assert!(!garden_row.last.is_empty());
         assert!(taxes_row.last.is_empty());
+        assert_eq!(garden_row.brief, "Grow beds.");
+        assert_eq!(taxes_row.brief, "");
     }
 
     #[test]
@@ -1569,11 +1606,14 @@ mod tests {
         let new_row = CampaignRow {
             address: "home/x".to_string(),
             last: String::new(),
+            brief: "never printed".to_string(),
         };
         assert!(format_row(&new_row).ends_with("new"));
+        assert!(!format_row(&new_row).contains("never printed"));
         let dormant = CampaignRow {
             address: "home/y".to_string(),
             last: "2026-09-21".to_string(),
+            brief: String::new(),
         };
         assert!(format_row(&dormant).contains("last 2026-09-21"));
     }

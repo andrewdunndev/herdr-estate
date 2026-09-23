@@ -114,21 +114,23 @@ pub fn run(
         return Ok(0);
     }
 
-    match run_interactive(built_rows)? {
-        Outcome::Cancelled => Ok(0),
-        // Dispatch runs on the restored terminal, so its progress lines
-        // show in the popup while `agent start` waits. A failure is held
-        // on screen: the popup closes the moment this process exits, and
-        // an error returned straight to `cli::run` would print into a
-        // pane that is already gone.
-        Outcome::Selected(row) => match dispatch::open_row(estates, &row) {
-            Ok(()) => Ok(0),
-            Err(e) => Ok(report_and_hold(
-                &e,
-                &mut CrosstermEvents,
-                &CROSSTERM_RAW_MODE,
-            )),
-        },
+    // Dispatch runs on the restored terminal, so its progress lines show
+    // in the popup while `agent start` waits. A failure is held on
+    // screen: the popup closes the moment this process exits, and an
+    // error returned straight to `cli::run` would print into a pane that
+    // is already gone.
+    let dispatched = match run_interactive(built_rows)? {
+        Outcome::Cancelled => return Ok(0),
+        Outcome::Selected(row) => dispatch::open_row(estates, &row),
+        Outcome::Fresh(row) => dispatch::fresh_row(estates, &row),
+    };
+    match dispatched {
+        Ok(()) => Ok(0),
+        Err(e) => Ok(report_and_hold(
+            &e,
+            &mut CrosstermEvents,
+            &CROSSTERM_RAW_MODE,
+        )),
     }
 }
 
@@ -356,11 +358,20 @@ fn translate_key(key: KeyEvent) -> Option<CoreEvent> {
     if key.kind != KeyEventKind::Press {
         return None;
     }
+    // A chord, not text: Alt+f must not type "f", nor a Cmd chord herdr
+    // passes through reach the filter or, with ctrl held, act as a key.
+    if matches!(key.code, KeyCode::Char(_))
+        && (key.modifiers.contains(KeyModifiers::ALT)
+            || key.modifiers.contains(KeyModifiers::SUPER))
+    {
+        return None;
+    }
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         return match key.code {
             KeyCode::Char('c') => Some(CoreEvent::Esc),
             KeyCode::Char('n') => Some(CoreEvent::Down),
             KeyCode::Char('p') => Some(CoreEvent::Up),
+            KeyCode::Char('f') => Some(CoreEvent::Fresh),
             _ => None,
         };
     }
@@ -437,6 +448,7 @@ mod event_loop_tests {
         vec![Row {
             address: "home/garden".to_string(),
             state: RowState::New,
+            brief: String::new(),
         }]
     }
 
@@ -508,6 +520,7 @@ mod event_loop_tests {
             Outcome::Selected(Row {
                 address: "home/garden".to_string(),
                 state: RowState::New,
+                brief: String::new(),
             })
         );
     }
@@ -608,6 +621,7 @@ mod event_loop_tests {
                 workspace_id: "w1".to_string(),
                 agent_status: "working".to_string(),
             },
+            brief: String::new(),
         }];
         let mut terminal = test_terminal();
         let mut events = ScriptedEvents::new(vec![Scripted::Event(key_press(KeyCode::Esc))]);
@@ -654,6 +668,7 @@ mod event_loop_tests {
                 let mut state = AppState::new(vec![Row {
                     address: address.to_string(),
                     state: RowState::New,
+                    brief: String::new(),
                 }]);
                 for c in address.chars() {
                     state = core::update(state, CoreEvent::Char(c));
@@ -850,6 +865,23 @@ mod translate_key_tests {
             translate_key(press(KeyCode::Char('p'), KeyModifiers::CONTROL)),
             Some(CoreEvent::Up)
         ));
+    }
+
+    #[test]
+    fn ctrl_f_is_fresh() {
+        assert!(matches!(
+            translate_key(press(KeyCode::Char('f'), KeyModifiers::CONTROL)),
+            Some(CoreEvent::Fresh)
+        ));
+    }
+
+    #[test]
+    fn a_char_with_alt_or_super_is_ignored() {
+        // Even with ctrl held: Cmd+Ctrl+f is not Ctrl-f.
+        let cmd_ctrl = KeyModifiers::SUPER | KeyModifiers::CONTROL;
+        for modifier in [KeyModifiers::ALT, KeyModifiers::SUPER, cmd_ctrl] {
+            assert!(translate_key(press(KeyCode::Char('f'), modifier)).is_none());
+        }
     }
 
     #[test]

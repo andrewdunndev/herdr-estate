@@ -1,7 +1,7 @@
 //! Builds the picker's row list from the estate table, each campaign's
-//! continuity log (via `verbs::list_campaigns`), and one `workspace list`
-//! call. Classification only — no sorting, no terminal I/O: `core` sorts,
-//! `shell` draws.
+//! continuity log and brief (via `verbs::list_campaigns`), and one
+//! `workspace list` call. Classification only — no sorting, no terminal
+//! I/O: `core` sorts, `shell` draws.
 
 use std::collections::HashMap;
 
@@ -38,6 +38,7 @@ pub fn build_rows(estates: &toml::Table) -> Result<Vec<Row>, EstateError> {
             Row {
                 address: campaign_row.address,
                 state,
+                brief: campaign_row.brief,
             }
         })
         .collect();
@@ -97,7 +98,7 @@ mod tests {
         fn campaign(&self, name: &str) {
             let dir = self.root.join("campaigns").join(name);
             std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("campaign.md"), "---\n---\n").unwrap();
+            std::fs::write(dir.join("campaign.md"), format!("---\n---\nThe {name}.\n")).unwrap();
         }
 
         fn campaign_with_log(&self, name: &str, sessions_log: &str) {
@@ -120,6 +121,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].address, "home/attic");
         assert_eq!(rows[0].state, RowState::New);
+        assert_eq!(rows[0].brief, "The attic.");
     }
 
     #[test]

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Ctrl-f in the picker starts a fresh conversation on the selected row
+  instead of resuming it. It does nothing on a row whose agent is
+  running, and the detail line says so. Alt and Cmd chords no longer
+  type into the filter or act as picker keys.
+- Each picker row shows its campaign's brief: the first body line of
+  its campaign.md that isn't a heading. `list` output is unchanged.
 - The picker takes herdr's own look, from its pane navigator: a filter
   line with a count, a rule, rows with herdr's status glyphs, a detail
   line saying what Enter will do, and key hints. Every cell is painted

@@ -165,7 +165,7 @@ fn stderr(out: &Output) -> String {
 fn render_once_matches_the_pure_core_for_the_same_rows() {
     let (f, root) = fixture();
     make_campaign(&root, "garden", "---\n---\n"); // will be live
-    let kitchen = make_campaign(&root, "kitchen", "---\n---\n"); // dormant
+    let kitchen = make_campaign(&root, "kitchen", "---\n---\n# kitchen\nStock it.\n"); // dormant
     append_session(&kitchen, "2026-09-10T00:00:00.000000+00:00", "conv-1");
     make_campaign(&root, "attic", "---\n---\n"); // new
 
@@ -196,16 +196,19 @@ fn render_once_matches_the_pure_core_for_the_same_rows() {
                 workspace_id: "w9".to_string(),
                 agent_status: "working".to_string(),
             },
+            brief: String::new(),
         },
         Row {
             address: "home/kitchen".to_string(),
             state: RowState::Dormant {
                 last: "2026-09-10".to_string(),
             },
+            brief: "Stock it.".to_string(),
         },
         Row {
             address: "home/attic".to_string(),
             state: RowState::New,
+            brief: String::new(),
         },
     ];
     let expected_lines: Vec<String> =
@@ -219,8 +222,11 @@ fn render_once_matches_the_pure_core_for_the_same_rows() {
     assert_eq!(stdout(&out), expected);
     assert!(expected.lines().count() <= 8);
     assert!(expected.lines().all(|l| l.chars().count() <= 40));
-    // The live row carries its dot: the glyphs came through.
+    // The live row carries its dot and the dormant row its brief, cut
+    // to the 5 cells 40 columns leave: the glyphs and the brief came
+    // through.
     assert!(expected.contains("> ● home/garden"), "{expected}");
+    assert!(expected.contains("home/kitchen  Stoc… last"), "{expected}");
 }
 
 #[test]

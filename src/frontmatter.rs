@@ -91,9 +91,8 @@ fn scalar(v: &str) -> Scalar {
 }
 
 /// A column-0 `key: rest` line. Requires the key to start with a letter
-/// or underscore, same as the Python `_TOP` pattern; returns the raw
-/// (un-stripped) remainder after the colon and any immediately following
-/// whitespace.
+/// or underscore; returns the raw (un-stripped) remainder after the
+/// colon and any immediately following whitespace.
 fn match_top(line: &str) -> Option<(&str, &str)> {
     let bytes = line.as_bytes();
     if bytes.is_empty() {
@@ -238,6 +237,22 @@ pub fn parse_frontmatter(text: &str) -> BTreeMap<String, Value> {
         }
     }
     data
+}
+
+/// A campaign's one-line purpose, for the picker's brief column: the
+/// first non-blank line after the frontmatter that is not a heading,
+/// with `**` and backticks stripped. Empty when there is none, including
+/// when the frontmatter never closes.
+pub fn brief(text: &str) -> String {
+    let mut lines = text.lines().peekable();
+    if lines.next_if(|l| l.trim() == "---").is_some() {
+        lines.find(|l| l.trim() == "---");
+    }
+    lines
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| l.replace("**", "").replace('`', ""))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -399,5 +414,15 @@ mod tests {
         let t = d["claude"].as_table().unwrap();
         assert_eq!(t.len(), 1);
         assert_eq!(t["remote-control"], Scalar::Bool(true));
+    }
+
+    #[test]
+    fn brief_is_the_first_body_line_that_is_not_a_heading() {
+        let text =
+            "---\nagent: claude\n---\n\n# garden\n\n## What\n\nGrow **the** `beds`.\nMore.\n";
+        assert_eq!(brief(text), "Grow the beds.");
+        assert_eq!(brief("Plain body.\n"), "Plain body.");
+        assert_eq!(brief("---\n---\n# only a heading\n"), "");
+        assert_eq!(brief("---\nagent: claude\nnever closed\n"), "");
     }
 }

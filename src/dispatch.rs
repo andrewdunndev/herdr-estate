@@ -1,5 +1,5 @@
-//! Dispatch of a picker row: what Enter does with the row the picker's
-//! core selected. Lives beside `verbs`, not in `picker::shell` — it
+//! Dispatch of a picker row: what Enter (or Ctrl-f) does with the row the
+//! picker's core selected. Lives beside `verbs`, not in `picker::shell` — it
 //! reuses `verbs::resume_with_ids`/`fresh_with_ids` exactly, the same
 //! functions `herdr-estate resume`/`fresh` call, so every guard those
 //! verbs enforce (ownership, alive, duplicate labels, unconfirmed close,
@@ -59,17 +59,28 @@ pub fn open_row(estates: &toml::Table, row: &Row) -> Result<(), EstateError> {
                 ))
             })?
         }
-        RowState::New => {
-            let result = verbs::fresh_with_ids(estates, &row.address, false)?;
-            result.workspace_id.ok_or_else(|| {
-                EstateError::Protocol(format!(
-                    "{}: fresh did not report a workspace id",
-                    row.address
-                ))
-            })?
-        }
+        RowState::New => return fresh_row(estates, row),
     };
-    progress::step(&format!("{}: focusing {workspace_id}", row.address));
+    focus(&row.address, workspace_id)
+}
+
+/// Ctrl-f on a row, and Enter on a New one: start a fresh conversation
+/// through `verbs::fresh_with_ids`, whatever the row's state, then focus
+/// the workspace it opens. The verb owns every refusal, a running agent
+/// included, and the retired conversation id stays in `sessions.log`.
+pub fn fresh_row(estates: &toml::Table, row: &Row) -> Result<(), EstateError> {
+    let result = verbs::fresh_with_ids(estates, &row.address, false)?;
+    let workspace_id = result.workspace_id.ok_or_else(|| {
+        EstateError::Protocol(format!(
+            "{}: fresh did not report a workspace id",
+            row.address
+        ))
+    })?;
+    focus(&row.address, workspace_id)
+}
+
+fn focus(address: &str, workspace_id: String) -> Result<(), EstateError> {
+    progress::step(&format!("{address}: focusing {workspace_id}"));
     herdrcli::call_herdr(
         &["workspace".to_string(), "focus".to_string(), workspace_id],
         true,
@@ -166,6 +177,7 @@ mod tests {
                 workspace_id: "w9".to_string(),
                 agent_status: "working".to_string(),
             },
+            brief: String::new(),
         };
         open_row(&f.estates, &row).unwrap();
         assert_eq!(f.fake.call_count(), 2);
@@ -200,6 +212,7 @@ mod tests {
             state: RowState::Dormant {
                 last: "2026-09-10".to_string(),
             },
+            brief: String::new(),
         };
         open_row(&f.estates, &row).unwrap();
 
@@ -235,6 +248,7 @@ mod tests {
         let row = Row {
             address: "home/attic".to_string(),
             state: RowState::New,
+            brief: String::new(),
         };
         open_row(&f.estates, &row).unwrap();
 
@@ -256,6 +270,37 @@ mod tests {
     }
 
     #[test]
+    fn fresh_on_a_dormant_row_starts_a_new_conversation_and_keeps_the_old_id() {
+        let f = make_fixture();
+        let cdir = f.campaign("garden");
+        crate::continuity::append(&cdir, "old-sid").unwrap();
+        f.fake.set_response(0, empty_list(), 0);
+        f.fake.set_response(1, CREATE_OK, 0);
+        f.fake.set_response(2, r#"{"result": {}}"#, 0);
+
+        let row = Row {
+            address: "home/garden".to_string(),
+            state: RowState::Dormant {
+                last: "2026-09-10".to_string(),
+            },
+            brief: String::new(),
+        };
+        fresh_row(&f.estates, &row).unwrap();
+
+        assert_eq!(f.fake.call_count(), 4);
+        assert_eq!(f.fake.argv(1)[..2], ["workspace", "create"]);
+        let start_argv = f.fake.argv(2);
+        assert!(
+            !start_argv.iter().any(|a| a == "--resume" || a == "old-sid"),
+            "{start_argv:?}"
+        );
+        assert_eq!(f.fake.argv(3), vec!["workspace", "focus", "w-new"]);
+        let lines = crate::continuity::read(&cdir);
+        assert_eq!(lines.len(), 2, "fresh appends one new id after the old");
+        assert!(lines[0].ends_with(" old-sid"), "{lines:?}");
+    }
+
+    #[test]
     fn a_guard_refusal_creates_nothing_starts_nothing_and_never_focuses() {
         let f = make_fixture();
         f.campaign("attic");
@@ -271,6 +316,7 @@ mod tests {
         let row = Row {
             address: "home/attic".to_string(),
             state: RowState::New,
+            brief: String::new(),
         };
         let err = open_row(&f.estates, &row).unwrap_err();
         assert!(matches!(err, EstateError::Guard(_)));
@@ -322,6 +368,7 @@ mod tests {
                 workspace_id: "w1".to_string(),
                 agent_status: "working".to_string(),
             },
+            brief: String::new(),
         };
         open_row(&f.estates, &row).unwrap();
 
@@ -364,6 +411,7 @@ mod tests {
                 workspace_id: "gone-w1".to_string(),
                 agent_status: "working".to_string(),
             },
+            brief: String::new(),
         };
         open_row(&f.estates, &row).unwrap();
 
@@ -398,6 +446,7 @@ mod tests {
                 workspace_id: "w1".to_string(),
                 agent_status: "unknown".to_string(),
             },
+            brief: String::new(),
         };
         let err = open_row(&f.estates, &row).unwrap_err();
         assert!(matches!(err, EstateError::Guard(_)));
@@ -420,6 +469,7 @@ mod tests {
         let row = Row {
             address: "home/attic".to_string(),
             state: RowState::New,
+            brief: String::new(),
         };
         let err = open_row(&f.estates, &row).unwrap_err();
         assert!(matches!(err, EstateError::Guard(_)));

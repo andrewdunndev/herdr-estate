@@ -28,6 +28,9 @@ pub enum RowState {
 pub struct Row {
     pub address: String,
     pub state: RowState,
+    /// The campaign's one-line purpose (`frontmatter::brief`), drawn
+    /// after the address; empty when it has none.
+    pub brief: String,
 }
 
 fn state_rank(state: &RowState) -> u8 {
@@ -58,6 +61,8 @@ pub fn sort_rows(mut rows: Vec<Row>) -> Vec<Row> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Selected(Row),
+    /// Ctrl-f: start a fresh conversation on the row instead.
+    Fresh(Row),
     Cancelled,
 }
 
@@ -80,6 +85,7 @@ pub enum Event {
     Up,
     Down,
     Enter,
+    Fresh,
     Esc,
 }
 
@@ -106,6 +112,13 @@ impl AppState {
 fn current_index(filtered: &[&Row], selected: &Option<String>) -> Option<usize> {
     let addr = selected.as_deref()?;
     filtered.iter().position(|r| r.address == addr)
+}
+
+/// A live row whose agent is running: anything but "unknown", as
+/// `doubleopen::workspace_alive` decides. Fresh there would only be
+/// refused by the verb, so Ctrl-f does nothing on it.
+fn running(row: &Row) -> bool {
+    matches!(&row.state, RowState::Live { agent_status, .. } if agent_status != "unknown")
 }
 
 /// After the filter text changes, keep the current selection if it still
@@ -156,6 +169,13 @@ pub fn update(mut state: AppState, event: Event) -> AppState {
             // and the picker stays open.
             if let Some(idx) = current_index(&filtered, &state.selected_address) {
                 state.done = Some(Outcome::Selected(filtered[idx].clone()));
+            }
+        }
+        Event::Fresh => {
+            let filtered = state.filtered();
+            let idx = current_index(&filtered, &state.selected_address);
+            if let Some(idx) = idx.filter(|&i| !running(filtered[i])) {
+                state.done = Some(Outcome::Fresh(filtered[idx].clone()));
             }
         }
         Event::Esc => {
@@ -238,7 +258,8 @@ pub enum Tone {
     Fill,
     /// The "/" prompt, the query and a live row's address (`text`).
     Text,
-    /// A dormant or new row's address (`subtext0`).
+    /// A dormant or new row's address, and every row's brief
+    /// (`subtext0`).
     Subtext,
     /// The placeholder, the count, meta, the detail line, the footer
     /// and the empty states (`overlay0`).
@@ -297,14 +318,27 @@ const PLACEHOLDER: &str = "filter campaigns";
 
 /// The footer's key hints, verb then key: herdr's navigator search
 /// footer (overlays.rs:937) with "search" as "filter" and "back" as
-/// "close". ctrl+c also closes, unlisted, as herdr's own footers leave
-/// out alternate keys.
-const FOOTER: [&str; 4] = ["filter type", "move ↑↓/ctrl+n/p", "open enter", "close esc"];
+/// "close", plus our fresh. ctrl+n/p also move and ctrl+c also closes,
+/// unlisted, as herdr's own footers leave out alternate keys.
+const FOOTER: [&str; 5] = [
+    "filter type",
+    "move ↑↓",
+    "open enter",
+    "fresh ctrl+f",
+    "close esc",
+];
 
 /// With fewer cells than this left for an address, a row drops its meta
 /// to give the address that room back [ours; the navigator clips meta,
 /// overlays.rs:909-917].
 const MIN_ADDRESS_CELLS: usize = 8;
+
+/// The widest the address column gets, so a long address can't push
+/// every brief off the row; a longer address ends in "…" [ours].
+const MAX_ADDRESS_CELLS: usize = 32;
+
+/// Blank cells between the address column and the brief [ours].
+const BRIEF_GAP: usize = 2;
 
 /// `s` split into the clusters a terminal draws as one unit: UAX #29
 /// extended grapheme clusters, from unicode-segmentation, the splitter
@@ -641,13 +675,21 @@ fn list_lines(
         vec![note_line(message, width)]
     } else {
         let offset = scroll_offset(selected_idx.unwrap_or(0), filtered.len(), height);
+        // As wide as the longest address the filter shows, so the
+        // briefs after it line up.
+        let column = filtered
+            .iter()
+            .map(|row| cells(&row.address))
+            .max()
+            .unwrap_or(0)
+            .min(MAX_ADDRESS_CELLS);
         filtered
             .iter()
             .skip(offset)
             .take(height)
             .map(|row| {
                 let selected = state.selected_address.as_deref() == Some(row.address.as_str());
-                row_line(row, width, ind, selected)
+                row_line(row, column, width, ind, selected)
             })
             .collect()
     };
@@ -656,14 +698,16 @@ fn list_lines(
     lines
 }
 
-/// A list row, " {glyph} {address}" with the meta right-aligned
+/// A list row, " {glyph} {address}  {brief}" with the meta right-aligned
 /// (adapted from the navigator's " {tree} {status} {label}",
 /// overlays.rs:861-865). The glyph is at column 2 and the address at
 /// `TEXT_COL`, under the query. A dormant or new row has no status and
 /// leaves the glyph cell blank, so every address starts in the same
-/// column. The address shrinks to fit, ending in "…", and takes the
-/// meta's room when fewer than `MIN_ADDRESS_CELLS` would be left.
-fn row_line(row: &Row, width: usize, ind: Indicators, selected: bool) -> ViewLine {
+/// column. The address sits in a column `column` cells wide and the
+/// brief gets what is left before the meta, each ending in "…" when
+/// cut. As the row narrows the brief goes first, then the meta, when
+/// fewer than `MIN_ADDRESS_CELLS` would be left for the address.
+fn row_line(row: &Row, column: usize, width: usize, ind: Indicators, selected: bool) -> ViewLine {
     let (glyph, glyph_tone, address_tone, meta) = match &row.state {
         RowState::Live { agent_status, .. } => {
             let status = Status::from_wire(agent_status);
@@ -683,23 +727,32 @@ fn row_line(row: &Row, width: usize, ind: Indicators, selected: bool) -> ViewLin
     } else {
         (room_alone(width), None)
     };
+    let column = column.min(room);
     let mut line = LineBuilder::new(width);
     line.push(" ", Tone::Fill);
     line.push(glyph, glyph_tone);
     line.push(" ", Tone::Fill);
-    line.push(&ellipsize(&row.address, room), address_tone);
+    line.push(&ellipsize(&row.address, column), address_tone);
+    // Only beside the meta, so the brief is always gone before it, and
+    // only with room for more than a lone "…".
     if let Some(meta) = meta {
+        let brief_room = room.saturating_sub(column + BRIEF_GAP);
+        if brief_room > 1 {
+            line.pad_to(TEXT_COL + column + BRIEF_GAP);
+            line.push(&ellipsize(&row.brief, brief_room), Tone::Subtext);
+        }
         line.push_right(&meta, Tone::Muted);
     }
     line.finish(selected)
 }
 
-/// Row H−2: " {address} · {action}" for the selected row, the
+/// Row H−2: " {address} · {action} · {fresh}" for the selected row, the
 /// navigator's detail line (overlays.rs:920-930). The action says what
-/// Enter will do, in `dispatch::open_row`'s terms. Hard-clipped with no
-/// "…", as herdr clips its own detail line (`put_text`, render.rs:
-/// 367-372): the ellipsis is only for a row's address. Blank when
-/// nothing is selected.
+/// Enter will do, in `dispatch::open_row`'s terms, and the last part
+/// whether Ctrl-f will start fresh or, on a running agent, why not.
+/// Hard-clipped with no "…", as herdr clips its own detail line
+/// (`put_text`, render.rs:367-372): the ellipsis is only for a row's
+/// address and brief. Blank when nothing is selected.
 fn detail_line(row: Option<&Row>, width: usize) -> ViewLine {
     let Some(row) = row else {
         return LineBuilder::new(width).finish(false);
@@ -709,7 +762,12 @@ fn detail_line(row: Option<&Row>, width: usize) -> ViewLine {
         RowState::Dormant { last } => format!("resume from {last}"),
         RowState::New => "start fresh".to_string(),
     };
-    note_line(&format!("{} · {action}", row.address), width)
+    let fresh = if running(row) {
+        "already running"
+    } else {
+        "fresh ctrl+f"
+    };
+    note_line(&format!("{} · {action} · {fresh}", row.address), width)
 }
 
 /// Row H−1: the key hints. When the footer is too narrow for all of
@@ -748,6 +806,14 @@ mod tests {
         Row {
             address: address.to_string(),
             state,
+            brief: String::new(),
+        }
+    }
+
+    fn with_brief(row: Row, brief: &str) -> Row {
+        Row {
+            brief: brief.to_string(),
+            ..row
         }
     }
 
@@ -870,6 +936,25 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_f_freshens_the_selected_row_unless_its_agent_is_running() {
+        // New, dormant, and live with the agent gone: fresh.
+        for row in [
+            new_row("home/attic"),
+            dormant("home/kitchen", "2026-09-10"),
+            live("home/garden", "unknown"),
+        ] {
+            let state = update(AppState::new(vec![row.clone()]), Event::Fresh);
+            assert_eq!(state.done, Some(Outcome::Fresh(row)));
+        }
+        // A running agent: the verb would refuse, so the key does
+        // nothing. Nor does it with nothing selected.
+        let running = AppState::new(vec![live("home/garden", "idle")]);
+        assert_eq!(update(running, Event::Fresh).done, None);
+        let none = typed(AppState::new(sample_rows()), "zzz");
+        assert_eq!(update(none, Event::Fresh).done, None);
+    }
+
+    #[test]
     fn esc_cancels_regardless_of_filter_or_selection() {
         let state = AppState::new(sample_rows());
         let state = update(state, Event::Char('x'));
@@ -943,29 +1028,34 @@ mod tests {
         // trailing cell, the detail wording and the footer to literal
         // strings, so a layout regression fails here instead of only
         // failing a golden test that compares view() against itself.
-        // The padding widths are counted by hand: 60 cells, less the
-        // text on each side.
+        // The padding widths are counted by hand: 64 cells, less the
+        // text on each side. Briefs start two cells after the longest
+        // address, home/kitchen's 12, at column 18; one is cut to the
+        // 29 cells before the gap and the meta.
         let rows = vec![
-            live("home/garden", "working"),
-            dormant("home/kitchen", "2026-09-10"),
+            with_brief(live("home/garden", "working"), "Grow the beds."),
+            with_brief(
+                dormant("home/kitchen", "2026-09-10"),
+                "Stock the pantry and keep the knives sharp.",
+            ),
             new_row("home/attic"),
         ];
         let state = AppState::new(rows);
-        let v = view(&state, 60, 10, Indicators::Symbols);
+        let v = view(&state, 64, 10, Indicators::Symbols);
         let pad = |n: usize| " ".repeat(n);
         assert_eq!(
             plain(&v),
             vec![
-                format!("  / filter campaigns{}3 campaigns", pad(28)),
-                format!(" {}", "─".repeat(59)),
-                format!("> ◐ home/garden{}working", pad(37)),
-                format!("    home/kitchen{}last 2026-09-10", pad(28)),
-                format!("    home/attic{}new", pad(42)),
+                format!("  / filter campaigns{}3 campaigns", pad(32)),
+                format!(" {}", "─".repeat(63)),
+                format!("> ◐ home/garden   Grow the beds.{}working", pad(24)),
+                "    home/kitchen  Stock the pantry and keep th… last 2026-09-10".to_string(),
+                format!("    home/attic{}new", pad(46)),
                 String::new(),
                 String::new(),
                 String::new(),
-                "  home/garden · focus w-home/garden".to_string(),
-                "  filter type · move ↑↓/ctrl+n/p · open enter · close esc".to_string(),
+                "  home/garden · focus w-home/garden · already running".to_string(),
+                "  filter type · move ↑↓ · open enter · fresh ctrl+f · close esc".to_string(),
             ]
         );
         assert_eq!(v.cursor, Some((4, 0)));
@@ -981,6 +1071,7 @@ mod tests {
             Some(Tone::Status(Status::Working))
         );
         assert_eq!(tone_of(&v.lines[2], "home/garden"), Some(Tone::Text));
+        assert_eq!(tone_of(&v.lines[2], "Grow the beds."), Some(Tone::Subtext));
         assert_eq!(tone_of(&v.lines[2], "working"), Some(Tone::Muted));
         assert_eq!(tone_of(&v.lines[3], "home/kitchen"), Some(Tone::Subtext));
         assert_eq!(tone_of(&v.lines[3], "last 2026-09-10"), Some(Tone::Muted));
@@ -1139,6 +1230,10 @@ mod tests {
         rows.push(live(
             "an-estate-with-a-very-long-name/and-an-equally-long-campaign-name",
             "blocked",
+        ));
+        rows.push(with_brief(
+            new_row("home/brief"),
+            "日本語の❤\u{FE0F}ブリーフ",
         ));
         let gutter = Seg {
             text: " ".to_string(),
@@ -1357,14 +1452,17 @@ mod tests {
     fn the_footer_drops_whole_hints_from_the_end() {
         let state = AppState::new(sample_rows());
         let footer = |width| view(&state, width, 5, Indicators::Dots).lines[4].plain();
-        // All four hints are 55 cells: they fit exactly at width 58,
+        // All five hints are 61 cells: they fit exactly at width 64,
         // after the gutter and the leading cell and before the trailing
         // cell.
         assert_eq!(
-            footer(58),
-            "  filter type · move ↑↓/ctrl+n/p · open enter · close esc"
+            footer(64),
+            "  filter type · move ↑↓ · open enter · fresh ctrl+f · close esc"
         );
-        assert_eq!(footer(57), "  filter type · move ↑↓/ctrl+n/p · open enter");
+        assert_eq!(
+            footer(63),
+            "  filter type · move ↑↓ · open enter · fresh ctrl+f"
+        );
         assert_eq!(footer(14), "  filter type");
         assert_eq!(footer(13), "");
     }
@@ -1477,11 +1575,19 @@ mod tests {
             new_row("home/attic"),
         ]);
         let detail = |state: &AppState| view(state, 60, 7, Indicators::Dots).lines[5].plain();
-        assert_eq!(detail(&state), "  home/garden · focus w-home/garden");
+        // A running agent says why Ctrl-f does nothing; every other row
+        // offers it.
+        assert_eq!(
+            detail(&state),
+            "  home/garden · focus w-home/garden · already running"
+        );
         state = update(state, Event::Down);
-        assert_eq!(detail(&state), "  home/kitchen · resume from 2026-09-10");
+        assert_eq!(
+            detail(&state),
+            "  home/kitchen · resume from 2026-09-10 · fresh ctrl+f"
+        );
         state = update(state, Event::Down);
-        assert_eq!(detail(&state), "  home/attic · start fresh");
+        assert_eq!(detail(&state), "  home/attic · start fresh · fresh ctrl+f");
         // Nothing matches, so nothing is selected: a blank line.
         state = typed(state, "zzz");
         assert_eq!(detail(&state), "");
@@ -1514,6 +1620,43 @@ mod tests {
             view(&fits, 17, 3, Indicators::Dots).lines[2].plain(),
             ">   home/abc new"
         );
+    }
+
+    #[test]
+    fn as_a_row_narrows_the_brief_goes_first_then_the_meta() {
+        let state = AppState::new(vec![with_brief(new_row("home/abc"), "Sweep it out.")]);
+        let row = |width| view(&state, width, 3, Indicators::Dots).lines[2].plain();
+        assert_eq!(
+            row(40),
+            format!(">   home/abc  Sweep it out.{}new", " ".repeat(9))
+        );
+        // Width 28 leaves 9 cells for the brief: 8 of it and "…".
+        assert_eq!(row(28), ">   home/abc  Sweep it… new");
+        // At 20 one cell is left, too few for more than "…", so the
+        // brief goes and the meta stays.
+        assert_eq!(row(20), ">   home/abc    new");
+        // At 16 the meta goes too, and the brief does not take its room.
+        assert_eq!(row(16), ">   home/abc");
+    }
+
+    #[test]
+    fn the_address_column_is_the_longest_match_up_to_32_cells() {
+        let long = format!("home/{}", "x".repeat(40));
+        let state = AppState::new(vec![
+            with_brief(new_row("home/garden"), "Grow."),
+            with_brief(new_row(&long), "Long."),
+        ]);
+        // Both briefs start at 4 + 32 + 2, and the long address is cut
+        // to the 32 cells.
+        let v = view(&state, 80, 7, Indicators::Dots);
+        assert_eq!(column_of(&v.lines[2], "Grow."), Some(38));
+        assert_eq!(column_of(&v.lines[3], "Long."), Some(38));
+        assert!(v.lines[3]
+            .plain()
+            .starts_with(&format!("    home/{}…  Long.", "x".repeat(26))));
+        // Filtered to home/garden alone, the column is its 11 cells.
+        let v = view(&typed(state, "garden"), 80, 7, Indicators::Dots);
+        assert_eq!(column_of(&v.lines[2], "Grow."), Some(17));
     }
 
     #[test]
