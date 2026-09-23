@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `{address}` in an estate `env` value becomes the campaign's address,
+  so one estate row can give each workspace a value naming its campaign.
+
 ## v0.1.0 - 2026-09-23
 
 First release. Long-running campaigns for herdr: threads of agent work,

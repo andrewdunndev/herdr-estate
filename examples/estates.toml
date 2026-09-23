@@ -8,7 +8,8 @@ prompts = ["prompts/base.md"]  # joined in order, appended to claude's system
 env = { }                      # exported into every workspace
 
 # In root, paths and prompts, ~ and $VAR expand first; a relative
-# paths or prompts entry then resolves against root.
+# paths or prompts entry then resolves against root. In an env value,
+# {address} becomes the campaign's address, e.g. "owner: {address}".
 
 [estate.home.claude]
 remote-control = true          # default for every campaign in this estate;

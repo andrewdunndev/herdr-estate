@@ -237,6 +237,8 @@ pub fn resolve(
         }
     }
 
+    // `{address}` in a value becomes this campaign's address, so one estate
+    // row can hand each workspace a value naming its own campaign.
     let mut env: BTreeMap<String, String> = BTreeMap::new();
     if let Some(t) = row.get("env").and_then(|v| v.as_table()) {
         for (k, v) in t.iter() {
@@ -245,7 +247,7 @@ pub fn resolve(
                     "estate '{estate_name}' env.{k}: must be a string, number or boolean"
                 ))
             })?;
-            env.insert(k.clone(), rendered);
+            env.insert(k.clone(), rendered.replace("{address}", address));
         }
     }
 
@@ -419,6 +421,23 @@ mod tests {
         let estates = estates_with(r);
         let c = resolve(&estates, "home/garden", false).unwrap();
         assert_eq!(c.env["K"], "V");
+    }
+
+    #[test]
+    fn estate_env_address_placeholder_names_the_campaign() {
+        let d = TempDir::new();
+        let root = d.path().join("home");
+        make_estate(&root, "garden", "---\n---\n");
+        let mut r = row(&root);
+        let mut env = toml::Table::new();
+        env.insert(
+            "H".to_string(),
+            toml::Value::String("X-Owner: {address}".to_string()),
+        );
+        r.insert("env".to_string(), toml::Value::Table(env));
+        let estates = estates_with(r);
+        let c = resolve(&estates, "home/garden", false).unwrap();
+        assert_eq!(c.env["H"], "X-Owner: home/garden");
     }
 
     #[test]
