@@ -2,7 +2,7 @@
 name = "herdr-estate"
 version = "0.1.0"
 edition = "2021"
-description = "Durable campaigns for herdr: resume a campaign's latest conversation or start fresh, addressed by estate/campaign."
+description = "Long-running campaigns for herdr: threads of agent work, addressed as estate/campaign, that outlive every conversation."
 license = "MIT"
 repository = "https://gitlab.com/dunn.dev/herdr-estate"
 rust-version = "1.88"
