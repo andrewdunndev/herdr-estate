@@ -7,27 +7,22 @@
 ![built with GitLab](https://img.shields.io/badge/built_with-GitLab-FC6D26?logo=gitlab)
 
 herdr-estate is a plugin for the [herdr](https://herdr.dev) terminal
-workspace manager. It gives herdr *estates* and *campaigns*: durable
-threads of agent work, addressed as `estate/campaign`, that resume
-where they left off instead of starting cold every time. The plugin
-owns two files plus a continuity log it reads and writes itself;
-herdr's own resume is never used.
+workspace manager. It gives herdr *estates* and *campaigns*: long-running
+threads of agent work, addressed as `estate/campaign`, that outlive any
+one conversation. The plugin owns two files plus a continuity log it
+reads and writes itself; herdr's own resume is never used.
 
 ## Install
-
-Build the binary, then link the plugin:
 
 ```sh
 cargo build --release
 herdr plugin link /path/to/herdr-estate
 ```
 
-`plugin link` is dev mode: it registers the path as-is and never runs
-the manifest's `[[build]]` table, so the binary needs to exist before
-you link it. Rebuilding after a source change takes effect on herdr's
-next invocation, no relink needed. `herdr plugin install` (a GitHub
-install, not dev mode) runs `[[build]]` itself. Then bind the picker
-to a key herdr leaves free, in your own `~/.config/herdr/config.toml`:
+`plugin link` never runs the manifest's `[[build]]`, so build first; a
+rebuild takes effect on herdr's next invocation. `herdr plugin install`
+runs `[[build]]` itself. Then bind the picker to a free key in
+`~/.config/herdr/config.toml`:
 
 ```toml
 [[keys.command]]
@@ -43,9 +38,8 @@ command = "herdr-estate.pick"
 ![An address names one estate table and one campaign directory inside it, where campaign.md overrides the estate's keys one at a time.](diagrams/two-files.svg)
 
 **The estate table**, `estates.toml`, lives at
-`$HERDR_PLUGIN_CONFIG_DIR/estates.toml` when herdr sets that (running as
-a plugin action), or `~/.config/herdr-estate/estates.toml` for a bare
-shell invocation:
+`$HERDR_PLUGIN_CONFIG_DIR/estates.toml` under herdr, or
+`~/.config/herdr-estate/estates.toml` from a bare shell:
 
 ```toml
 [estate.home]
@@ -60,11 +54,6 @@ env = { }
 remote-control = true
 ```
 
-A relative `prompts` entry resolves against the estate's `root`, not the
-directory herdr-estate happens to run from; `~` and `$VAR` expand
-first, so an absolute or `~`-prefixed entry is unaffected. See
-[`examples/estates.toml`](examples/estates.toml).
-
 **The campaign file**, `campaigns/<name>/campaign.md`, carries YAML
 frontmatter:
 
@@ -76,21 +65,15 @@ claude:
   mcp-config: .mcp.json
 ```
 
-The shipped adapter is `claude`; a kind with no adapter starts with no
-mapped flags and prints one warning line. A relative `paths` entry
-resolves against the estate's `root`, the same rule `prompts` follows
-above, and a path listed by both the estate and the campaign is kept
-once. See [`docs/vocabulary.md`](docs/vocabulary.md) for the words this
-plugin uses.
-
-Continuity lives in `campaigns/<name>/sessions.log`, its timestamp
-ISO-8601 UTC and its fields space-separated. A campaign with no
-recorded conversation resumes as fresh, and says so.
+A relative `prompts` or `paths` entry resolves against the estate's
+`root` once `~` and `$VAR` expand, and a path in both files is kept
+once. The shipped adapter is `claude`; any other `agent` starts with no
+mapped flags and one warning. `campaigns/<name>/sessions.log` holds one
+line per conversation; `resume` with none recorded acts as `fresh` and
+says so. See [`examples/`](examples/) and
+[`docs/vocabulary.md`](docs/vocabulary.md).
 
 ## Worktrees (optional)
-
-A campaign with no `worktree` key runs in its plain directory. With
-one:
 
 ```yaml
 worktree:
@@ -98,24 +81,19 @@ worktree:
   branch: wt/site-work  # created from the remote default branch if missing
 ```
 
-`resume` and `fresh` ensure the worktree exists, use it as the
-workspace cwd, and add it to the agent's paths. This plugin never
-removes a worktree: herdr's own `worktree remove --force` deletes
-uncommitted work, and removal stays a human act. It uses plain git, not
-`herdr worktree`, because that family takes no `--env` (the address
-could not be exported) and registers a stray base workspace.
+With this key, `resume` and `fresh` ensure the worktree exists, use it
+as the workspace cwd, and add it to the agent's paths. herdr-estate
+never removes a worktree; that stays a human act. It uses plain git
+because `herdr worktree` takes no `--env` and registers a stray base
+workspace.
 
 ## Environment
 
-The agent process started in a workspace inherits the environment of
-that workspace's own shell, which the herdr server spawns, not the
-environment of whatever shell ran `herdr-estate` or `herdr`. Start the
-herdr server from a clean shell. On every `workspace create`,
-herdr-estate empties three names before adding the estate's own `env`
-table, so a value from your own login session never rides along by
-accident: `ANTHROPIC_API_KEY`, `TMUX`, `TMUX_PANE`. An estate table
-entry for one of these wins over the empty value, since it's added
-after. No other variable is touched.
+An agent inherits the environment of its workspace's shell, which the
+herdr server spawns, so start the server from a clean shell. On every
+`workspace create`, herdr-estate empties `ANTHROPIC_API_KEY`, `TMUX`
+and `TMUX_PANE`, then adds the estate's `env` table, which may set them
+again. No other variable is touched.
 
 ## The verbs
 
@@ -126,50 +104,50 @@ after. No other variable is touched.
 - `herdr-estate fresh [<address>]`: retire the latest conversation and
   start a new one in the same space.
 - `herdr-estate list`: list every campaign the estate table knows.
-- `--dry-run` prints the plan for `resume`/`fresh`. It makes the same
-  read calls, so every guard applies, and it creates, closes or starts
-  nothing. It requires an explicit `<address>`.
 
-Run as a herdr plugin action with no address, `<address>` is derived
-from the current workspace's label.
-
-Both verbs print each step to stderr, and every run appends to
+With no `<address>`, the current workspace's label is used.
+`--dry-run` prints the plan for `resume` or `fresh` after the same
+reads and guards and changes nothing; it needs an explicit
+`<address>`. Each step prints to stderr and every run appends to
 `events.log`; see [docs/events.md](docs/events.md).
+
+## Long-running campaigns
+
+A campaign is long-running; its conversations should be short. A
+conversation costs more per turn as its context grows, so recycle it
+often: have the agent write where things stand into the campaign's log,
+exit it, then run `fresh` (ctrl+f in the picker). The new conversation
+carries nothing over, so the estate's `prompts` should point it at
+`campaign.md` and the log's latest entry. `resume` is for the
+conversation you meant to keep. Every retired conversation stays in
+`sessions.log`.
 
 ## Picker
 
-`herdr-estate pick` lists every campaign of every estate the table
-knows, one row per address, in a small terminal UI:
+`herdr-estate pick` lists every campaign the table knows, with the
+first body line of its `campaign.md`:
 
-- **live**: a workspace currently carries the address; its agent status
-  (working, blocked, idle, done, unknown) shows next to it.
-- **dormant**: no live workspace, but `sessions.log` records a
-  conversation; the date of its last line shows next to it.
+- **live**: a workspace carries the address; its agent status shows.
+- **dormant**: no workspace, but `sessions.log` records a
+  conversation; its last date shows.
 - **new**: neither.
 
-Rows sort live first, then dormant by most recent, then new. Type to
-filter by substring on the address; up/down or ctrl-p/ctrl-n move the
-selection; Esc or ctrl-c quits without doing anything. Enter acts on the
-selected row: live focuses the existing workspace, dormant resumes the
-campaign and then focuses the workspace it opens, new does the same
-through `fresh`. On Enter the row's workspace is read again at dispatch
-time and routed through the same verb functions and guards, never
-trusted from the drawn list. When nothing matches, the picker shows
-"no matching campaigns" and Enter does nothing. Status glyphs follow
-herdr's config; non-default themes get terminal colours.
+Live rows sort first, then dormant by most recent, then new. Type to
+filter; the footer lists the keys. Enter focuses the row's
+workspace, first resuming a dormant campaign or starting a new one
+fresh. It re-reads the workspace and goes through the same verbs and
+guards as the CLI. Glyphs follow herdr's config; a non-default theme
+gets terminal colours.
 
-It opens as a popup over the active pane, from the key bound above or
-by hand:
+It opens as a popup from the key bound above, or by hand:
 
 ```sh
 herdr plugin pane open --plugin herdr-estate --entrypoint picker
 ```
 
 herdr runs an action with no terminal, so the `pick` action makes that
-same call rather than drawing.
-
-`herdr-estate pick --render-once --width <W> --height <H>` prints a
-single frame as plain text, no terminal needed (defaults to 80x20).
+call. `pick --render-once --width <W> --height <H>` prints one frame as
+plain text (default 80x20).
 
 ## Worked example
 
@@ -178,8 +156,7 @@ Using the invented names in [`examples/`](examples/):
 ```sh
 export HERDR_PLUGIN_CONFIG_DIR=$(mktemp -d)
 cp examples/estates.toml "$HERDR_PLUGIN_CONFIG_DIR/estates.toml"
-# edit its `root` to point at a real clone, e.g. one holding
-# examples/home/campaigns/{garden,taxes}/campaign.md
+# point its `root` at examples/home in a clone of this repo
 
 cargo build --release
 target/release/herdr-estate list
@@ -201,10 +178,7 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-Unit tests cover pure logic. Everything crossing the herdr CLI
-boundary runs against a fake `herdr` executable (`$HERDR_BIN_PATH`)
-that records each call's argv and environment and replays canned
-responses, so tests assert what herdr was actually asked to do. The
-integration suite in `tests/cli.rs` drives the built binary itself:
-subcommands, `--dry-run`, exit codes, and address derivation from
-`$HERDR_WORKSPACE_ID`.
+Everything crossing the herdr CLI boundary runs against a fake `herdr`
+(`$HERDR_BIN_PATH`) that records each call's argv and environment and
+replays canned responses. The suites in `tests/` drive the built
+binary.
