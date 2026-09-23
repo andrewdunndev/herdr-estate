@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The picker's Ctrl-f now doubles as a stop: on a row whose agent is
+  idle or done, a first press arms and a second press on the same row
+  stops it and starts fresh. Working, blocked or any other running
+  status still refuses, and the CLI's `fresh` still refuses a running
+  agent outright.
+
 ## v0.1.1 - 2026-09-23
 
 - `{address}` in an estate `env` value becomes the campaign's address,
