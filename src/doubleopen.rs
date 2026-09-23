@@ -94,6 +94,56 @@ pub fn registry_holder(conversation_id: &str) -> Option<String> {
     None
 }
 
+/// Every live pane in `~/.claude/sessions` that currently holds
+/// `conversation_id`, not just the first -- the stop path's own
+/// question, since the conversation it retires is by definition open in
+/// the very pane calling this, and what matters there is whether a
+/// SECOND live pane holds it too. Otherwise the same read and the same
+/// dead-pid exclusion as `registry_holder`.
+pub fn live_registry_holders(conversation_id: &str) -> Vec<String> {
+    let sessions_dir = home_dir().join(".claude").join("sessions");
+    let entries = match std::fs::read_dir(&sessions_dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+    let mut holders = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let value: serde_json::Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if value.get("sessionId").and_then(|v| v.as_str()) != Some(conversation_id) {
+            continue;
+        }
+        let stem = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) => s,
+            None => continue,
+        };
+        let pid: u32 = match stem.parse() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if !pid_alive(pid) {
+            continue;
+        }
+        let name = value
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("unnamed");
+        holders.push(format!("{name} (pid {stem})"));
+    }
+    holders
+}
+
 /// A conversation persists only once it has at least one turn.
 pub fn transcript_exists(conversation_id: &str) -> bool {
     let projects_dir: &Path = &home_dir().join(".claude").join("projects");

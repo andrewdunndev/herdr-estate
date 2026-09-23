@@ -163,6 +163,8 @@ pub struct WorkspaceRef {
     pub label: Option<String>,
     #[serde(default)]
     pub agent_status: Option<AgentStatus>,
+    #[serde(default)]
+    pub pane_count: Option<usize>,
 }
 
 /// `workspace create`'s envelope. Both ids ARE guard-critical here —

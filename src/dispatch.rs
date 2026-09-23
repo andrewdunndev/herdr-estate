@@ -388,13 +388,13 @@ mod tests {
         f.fake.set_response(
             0,
             r#"{"result": {"workspaces": [
-                {"workspace_id": "w1", "label": "home/garden", "agent_status": "idle"}
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "idle", "pane_count": 1}
             ]}}"#,
             0,
         ); // check_replaceable_running_workspace's live_workspace
         f.fake.set_response(
             1,
-            r#"{"result": {"workspace": {"label": "home/garden", "agent_status": "idle"}}}"#,
+            r#"{"result": {"workspace": {"label": "home/garden", "agent_status": "idle", "pane_count": 1}}}"#,
             0,
         ); // close_if_ours get
         f.fake.set_response(2, r#"{"result": {}}"#, 0); // close
