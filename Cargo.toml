@@ -14,7 +14,6 @@ name = "herdr-estate"
 path = "src/main.rs"
 
 [dependencies]
-crossterm = { version = "0.29.0", default-features = false, features = ["bracketed-paste", "events"] }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

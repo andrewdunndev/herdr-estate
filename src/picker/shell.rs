@@ -11,14 +11,14 @@ use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
-use crossterm::cursor::MoveTo;
-use crossterm::event::{
+use ratatui::backend::IntoCrossterm;
+use ratatui::crossterm::cursor::MoveTo;
+use ratatui::crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event as TermEvent, KeyCode, KeyEvent,
     KeyEventKind, KeyModifiers,
 };
-use crossterm::style::{SetBackgroundColor, SetForegroundColor};
-use crossterm::terminal::{Clear, ClearType};
-use ratatui::backend::IntoCrossterm;
+use ratatui::crossterm::style::{SetBackgroundColor, SetForegroundColor};
+use ratatui::crossterm::terminal::{Clear, ClearType};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
@@ -55,7 +55,7 @@ impl RestoreGuard {
 
 /// Bracketed paste off, then ratatui's own restore.
 fn restore() {
-    let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
+    let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
     ratatui::restore();
 }
 
@@ -178,7 +178,7 @@ fn dispatch_outcome(
 /// 1995-1998, used at :1830), so the clear fills every cell, and the
 /// plain lines written after it (progress.rs's) keep those colours.
 fn paint_panel(out: &mut impl Write, p: &Palette) -> std::io::Result<()> {
-    crossterm::queue!(
+    ratatui::crossterm::queue!(
         out,
         SetBackgroundColor(p.panel_bg.into_crossterm()),
         SetForegroundColor(p.text.into_crossterm()),
@@ -222,8 +222,8 @@ struct RawMode {
 }
 
 const CROSSTERM_RAW_MODE: RawMode = RawMode {
-    enable: crossterm::terminal::enable_raw_mode,
-    disable: crossterm::terminal::disable_raw_mode,
+    enable: ratatui::crossterm::terminal::enable_raw_mode,
+    disable: ratatui::crossterm::terminal::disable_raw_mode,
 };
 
 /// A failed dispatch, kept readable: report it (stderr and the log),
@@ -307,7 +307,7 @@ fn run_interactive(state: AppState, look: (Palette, Indicators)) -> Result<Outco
     };
     let _guard = RestoreGuard::new();
     // A paste arrives whole, so its newlines can't press Enter.
-    crossterm::execute!(std::io::stdout(), EnableBracketedPaste)
+    ratatui::crossterm::execute!(std::io::stdout(), EnableBracketedPaste)
         .map_err(|e| EstateError::Protocol(format!("could not start the terminal: {e}")))?;
     event_loop(&mut terminal, state, &mut CrosstermEvents, look)
 }
