@@ -168,6 +168,7 @@ fn dispatch_outcome(
         Outcome::Cancelled => Ok(()),
         Outcome::Selected(row) => dispatch::open_row(estates, &row),
         Outcome::Fresh(row) => dispatch::fresh_row(estates, &row),
+        Outcome::FreshRunning(row) => dispatch::fresh_row_running(estates, &row),
         Outcome::Create { address, brief } => dispatch::create_and_open(estates, &address, &brief),
     }
 }
@@ -854,6 +855,41 @@ mod event_loop_tests {
             assert_eq!(String::from_utf8(out).unwrap(), want, "{panel:?}");
             assert_eq!(fake.argv(1), vec!["workspace", "focus", "w9"]);
         }
+    }
+
+    #[test]
+    fn fresh_running_dispatches_to_stop_and_fresh_not_open_row() {
+        // The routing itself, not the guard it runs through (`verbs`
+        // owns and tests that): `Outcome::FreshRunning` must reach
+        // `dispatch::fresh_row_running`, never `open_row`'s plain focus.
+        // With no `home` estate configured, `fresh_with_ids_stop_running`
+        // fails resolving the campaign before it ever calls herdr; had
+        // this gone to `open_row` instead, its Live-row branch calls
+        // `workspace list` first regardless, so a herdr call of any kind
+        // here would mean the wrong path ran.
+        let d = crate::test_support::TempDir::new();
+        let fake = crate::test_support::FakeHerdr::new();
+        let _g = crate::test_support::EnvGuard::set(&[
+            ("HERDR_BIN_PATH", fake.bin_path().to_str().unwrap()),
+            ("HERDR_PLUGIN_STATE_DIR", d.path().to_str().unwrap()),
+        ]);
+        let row = Row {
+            address: "home/garden".to_string(),
+            state: RowState::Live {
+                workspace_id: "w1".to_string(),
+                agent_status: "idle".to_string(),
+            },
+            brief: String::new(),
+        };
+        let err = dispatch_outcome(
+            &toml::Table::new(),
+            Outcome::FreshRunning(row),
+            None,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, EstateError::Config(msg) if msg.contains("no estate")));
+        assert_eq!(fake.call_count(), 0);
     }
 
     #[test]
