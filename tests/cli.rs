@@ -193,6 +193,21 @@ fn unknown_subcommand_exits_2() {
 }
 
 #[test]
+fn version_prints_the_package_version_and_writes_no_events_log() {
+    let (f, _root) = fixture();
+    for flag in ["--version", "-V"] {
+        let out = run(&f, &[flag], &[]);
+        assert!(out.status.success(), "{}", stderr(&out));
+        assert_eq!(
+            stdout(&out).trim(),
+            format!("herdr-estate {}", env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(f.fake.call_count(), 0);
+        assert!(!f.state_dir.join("events.log").exists());
+    }
+}
+
+#[test]
 fn list_rejects_a_dry_run_flag_it_does_not_take() {
     let (f, _root) = fixture();
     let out = run(&f, &["list", "--dry-run"], &[]);

@@ -237,6 +237,14 @@ fn dispatch(cmd: Command) -> Result<i32, EstateError> {
 /// `EstateError` (printed as `herdr-estate: <message>` to stderr), 2 on
 /// a usage error in the arguments themselves.
 pub fn run(argv: &[String]) -> i32 {
+    // Ahead of the log line below: a version check is not a run and
+    // writes nothing to events.log.
+    if argv.first().map(String::as_str) == Some("--version")
+        || argv.first().map(String::as_str) == Some("-V")
+    {
+        println!("herdr-estate {}", env!("CARGO_PKG_VERSION"));
+        return 0;
+    }
     // Every run opens with one log line naming its argv and how herdr
     // started it: the same `pick` argv draws in the popup and, run as
     // an action, opens that popup instead, and the log should say which
@@ -455,6 +463,16 @@ mod tests {
         assert_eq!(logged.len(), 2);
         assert_eq!(logged[0], "run: herdr-estate launch (shell)");
         assert!(logged[1].starts_with("error: "));
+    }
+
+    #[test]
+    fn herdr_plugin_toml_version_matches_cargo_pkg_version() {
+        let text = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/herdr-plugin.toml"));
+        let manifest: toml::Table = toml::from_str(text).unwrap();
+        assert_eq!(
+            manifest["version"].as_str().unwrap(),
+            env!("CARGO_PKG_VERSION")
+        );
     }
 
     #[test]
