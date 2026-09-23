@@ -452,38 +452,44 @@ fn event_loop<B: ratatui::backend::Backend>(
     }
 }
 
-/// `None` for a key press this picker gives no meaning to (ignored), or
-/// for a release/repeat event on a platform that reports them.
+/// `None` only for a release/repeat event on a platform that reports
+/// them: those never reach `core::update`, so Ctrl-f's arm survives
+/// them untouched, the same as it always has. Every genuine press
+/// reaches `update` as `Some`, mapped to its own event or, for one this
+/// picker gives no other meaning to, `CoreEvent::Other` -- so the arm
+/// still disarms on it, the same as any mapped key.
 fn translate_key(key: KeyEvent) -> Option<CoreEvent> {
     if key.kind != KeyEventKind::Press {
         return None;
     }
     // A chord, not text: Alt+f must not type "f", nor a Cmd chord herdr
     // passes through reach the filter or, with ctrl held, act as a key.
+    // Still routed through as `Other` so the arm disarms on it like any
+    // other key.
     if matches!(key.code, KeyCode::Char(_))
         && (key.modifiers.contains(KeyModifiers::ALT)
             || key.modifiers.contains(KeyModifiers::SUPER))
     {
-        return None;
+        return Some(CoreEvent::Other);
     }
     if key.modifiers.contains(KeyModifiers::CONTROL) {
-        return match key.code {
-            KeyCode::Char('c') => Some(CoreEvent::Quit),
-            KeyCode::Char('n') => Some(CoreEvent::Down),
-            KeyCode::Char('p') => Some(CoreEvent::Up),
-            KeyCode::Char('f') => Some(CoreEvent::Fresh),
-            _ => None,
-        };
+        return Some(match key.code {
+            KeyCode::Char('c') => CoreEvent::Quit,
+            KeyCode::Char('n') => CoreEvent::Down,
+            KeyCode::Char('p') => CoreEvent::Up,
+            KeyCode::Char('f') => CoreEvent::Fresh,
+            _ => CoreEvent::Other,
+        });
     }
-    match key.code {
-        KeyCode::Char(c) => Some(CoreEvent::Char(c)),
-        KeyCode::Backspace => Some(CoreEvent::Backspace),
-        KeyCode::Up => Some(CoreEvent::Up),
-        KeyCode::Down => Some(CoreEvent::Down),
-        KeyCode::Enter => Some(CoreEvent::Enter),
-        KeyCode::Esc => Some(CoreEvent::Esc),
-        _ => None,
-    }
+    Some(match key.code {
+        KeyCode::Char(c) => CoreEvent::Char(c),
+        KeyCode::Backspace => CoreEvent::Backspace,
+        KeyCode::Up => CoreEvent::Up,
+        KeyCode::Down => CoreEvent::Down,
+        KeyCode::Enter => CoreEvent::Enter,
+        KeyCode::Esc => CoreEvent::Esc,
+        _ => CoreEvent::Other,
+    })
 }
 
 #[cfg(test)]
@@ -544,10 +550,25 @@ mod event_loop_tests {
         TermEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
     }
 
+    fn ctrl_key_press(c: char) -> TermEvent {
+        TermEvent::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL))
+    }
+
     fn one_row() -> Vec<Row> {
         vec![Row {
             address: "home/garden".to_string(),
             state: RowState::New,
+            brief: String::new(),
+        }]
+    }
+
+    fn one_idle_running_row() -> Vec<Row> {
+        vec![Row {
+            address: "home/garden".to_string(),
+            state: RowState::Live {
+                workspace_id: "w1".to_string(),
+                agent_status: "idle".to_string(),
+            },
             brief: String::new(),
         }]
     }
@@ -597,6 +618,31 @@ mod event_loop_tests {
         let outcome = event_loop(
             &mut terminal,
             AppState::new(one_row()),
+            &mut events,
+            catppuccin(),
+        )
+        .unwrap();
+        assert_eq!(outcome, Outcome::Cancelled);
+    }
+
+    #[test]
+    fn an_unmapped_key_between_two_ctrl_f_presses_disarms_instead_of_firing() {
+        // Ctrl-f arms an idle row; Tab is unmapped but must still reach
+        // core::update and disarm it (translate_key routes it as
+        // `Other` rather than dropping it as `None`, which would leave
+        // the arm untouched). The next Ctrl-f then only re-arms, so Esc
+        // cancels the picker rather than the second Ctrl-f firing
+        // FreshRunning on an arm two key presses stale.
+        let mut terminal = test_terminal();
+        let mut events = ScriptedEvents::new(vec![
+            Scripted::Event(ctrl_key_press('f')),
+            Scripted::Event(key_press(KeyCode::Tab)),
+            Scripted::Event(ctrl_key_press('f')),
+            Scripted::Event(key_press(KeyCode::Esc)),
+        ]);
+        let outcome = event_loop(
+            &mut terminal,
+            AppState::new(one_idle_running_row()),
             &mut events,
             catppuccin(),
         )
@@ -893,6 +939,80 @@ mod event_loop_tests {
     }
 
     #[test]
+    fn fresh_running_reaches_the_stop_and_fresh_verb_not_the_ordinary_refusing_one() {
+        // The test above shows FreshRunning does not reach `open_row`,
+        // but `fresh_row` and `fresh_row_running` both resolve the
+        // campaign first and fail identically with no estate
+        // configured -- that alone cannot tell the two apart. With a
+        // real estate and an idle, owned workspace they diverge
+        // sharply: `fresh_row`'s `check_live_workspace` refuses an idle
+        // workspace outright ("already open ... with a running
+        // agent"), while `fresh_row_running` closes and recreates it.
+        // A mutation routing `FreshRunning` to `fresh_row` instead
+        // would turn this close call into that refusal.
+        let tmp = crate::test_support::TempDir::new();
+        let root = tmp.path().join("home");
+        let cdir = root.join("campaigns").join("garden");
+        std::fs::create_dir_all(&cdir).unwrap();
+        std::fs::write(cdir.join("campaign.md"), "---\n---\nThe garden.\n").unwrap();
+        let fake = crate::test_support::FakeHerdr::new();
+        let user_home = tmp.path().join("userhome");
+        std::fs::create_dir_all(&user_home).unwrap();
+        let _g = crate::test_support::EnvGuard::set(&[
+            ("HERDR_BIN_PATH", fake.bin_path().to_str().unwrap()),
+            (
+                "HERDR_PLUGIN_STATE_DIR",
+                tmp.path().join("state").to_str().unwrap(),
+            ),
+            ("HOME", user_home.to_str().unwrap()),
+        ]);
+        crate::ownership::record("home/garden", "w1").unwrap();
+        fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "idle"}
+            ]}}"#,
+            0,
+        );
+        fake.set_response(
+            1,
+            r#"{"result": {"workspace": {"label": "home/garden", "agent_status": "idle"}}}"#,
+            0,
+        );
+        fake.set_response(2, r#"{"result": {}}"#, 0); // close
+        fake.set_response(
+            3,
+            r#"{"result": {
+                "workspace": {"workspace_id": "w-new"},
+                "root_pane": {"pane_id": "p1"}
+            }}"#,
+            0,
+        ); // create
+        fake.set_response(4, r#"{"result": {}}"#, 0); // start
+        fake.set_response(5, r#"{"result": {}}"#, 0); // focus
+
+        let mut home_table = toml::Table::new();
+        home_table.insert(
+            "root".to_string(),
+            toml::Value::String(root.to_string_lossy().to_string()),
+        );
+        let mut estates = toml::Table::new();
+        estates.insert("home".to_string(), toml::Value::Table(home_table));
+
+        let row = Row {
+            address: "home/garden".to_string(),
+            state: RowState::Live {
+                workspace_id: "w1".to_string(),
+                agent_status: "idle".to_string(),
+            },
+            brief: String::new(),
+        };
+        dispatch_outcome(&estates, Outcome::FreshRunning(row), None, &mut Vec::new()).unwrap();
+        assert_eq!(fake.argv(2), vec!["workspace", "close", "w1"]);
+        assert_eq!(fake.argv(5), vec!["workspace", "focus", "w-new"]);
+    }
+
+    #[test]
     fn every_cluster_is_painted_where_the_core_measured_it() {
         use ratatui::buffer::CellWidth;
         use ratatui::layout::Position;
@@ -1131,17 +1251,26 @@ mod translate_key_tests {
     }
 
     #[test]
-    fn a_char_with_alt_or_super_is_ignored() {
-        // Even with ctrl held: Cmd+Ctrl+f is not Ctrl-f.
+    fn a_char_with_alt_or_super_types_nothing_but_still_disarms() {
+        // Even with ctrl held: Cmd+Ctrl+f is not Ctrl-f. It reaches
+        // `update` as `Other` rather than `None`, so it still disarms
+        // Ctrl-f's second press like any other key, even though it
+        // types nothing into the filter.
         let cmd_ctrl = KeyModifiers::SUPER | KeyModifiers::CONTROL;
         for modifier in [KeyModifiers::ALT, KeyModifiers::SUPER, cmd_ctrl] {
-            assert!(translate_key(press(KeyCode::Char('f'), modifier)).is_none());
+            assert!(matches!(
+                translate_key(press(KeyCode::Char('f'), modifier)),
+                Some(CoreEvent::Other)
+            ));
         }
     }
 
     #[test]
-    fn ctrl_with_an_unmapped_letter_is_ignored() {
-        assert!(translate_key(press(KeyCode::Char('x'), KeyModifiers::CONTROL)).is_none());
+    fn ctrl_with_an_unmapped_letter_disarms_only() {
+        assert!(matches!(
+            translate_key(press(KeyCode::Char('x'), KeyModifiers::CONTROL)),
+            Some(CoreEvent::Other)
+        ));
     }
 
     #[test]
@@ -1193,8 +1322,14 @@ mod translate_key_tests {
     }
 
     #[test]
-    fn an_unmapped_key_is_ignored() {
-        assert!(translate_key(press(KeyCode::Tab, KeyModifiers::NONE)).is_none());
+    fn an_unmapped_key_disarms_only() {
+        // Tab does nothing of its own, but it must still reach `update`
+        // as `Other` rather than being dropped as `None`: dropped, it
+        // would never run the disarm and Ctrl-f's arm would survive it.
+        assert!(matches!(
+            translate_key(press(KeyCode::Tab, KeyModifiers::NONE)),
+            Some(CoreEvent::Other)
+        ));
     }
 
     #[test]

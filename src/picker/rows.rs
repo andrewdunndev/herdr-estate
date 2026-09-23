@@ -24,11 +24,16 @@ pub fn build_rows(estates: &toml::Table) -> Result<Vec<Row>, EstateError> {
             let state = match live.get(campaign_row.address.as_str()) {
                 Some(ws) => RowState::Live {
                     workspace_id: ws.workspace_id.clone(),
+                    // Distinct from the real wire value "unknown" (a
+                    // bare shell, no agent attached): a missing or null
+                    // key is herdr sending nothing to trust either way,
+                    // which `core::running` must treat as attached and
+                    // fail closed, not wave through as a plain shell.
                     agent_status: ws
                         .agent_status
                         .as_ref()
                         .map(|s| s.as_str().to_string())
-                        .unwrap_or_else(|| "unknown".to_string()),
+                        .unwrap_or_else(|| "missing".to_string()),
                 },
                 None if !campaign_row.last.is_empty() => RowState::Dormant {
                     last: campaign_row.last,
@@ -160,6 +165,31 @@ mod tests {
                 agent_status: "working".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn a_missing_agent_status_is_not_the_wire_value_unknown() {
+        // herdr 0.9.1 always sends agent_status, so this is a
+        // fail-closed defense: a listing that omits the key (or sends
+        // it null) must read differently from the real wire value
+        // "unknown" (a bare shell), so the picker's `core::running`
+        // treats it as attached rather than waving it through as a
+        // plain shell with nothing to protect.
+        let f = make_fixture();
+        f.campaign("garden");
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w9", "label": "home/garden"}
+            ]}}"#,
+            0,
+        );
+        let rows = build_rows(&f.estates).unwrap();
+        assert_eq!(rows.len(), 1);
+        let RowState::Live { agent_status, .. } = &rows[0].state else {
+            panic!("expected a Live row, got {:?}", rows[0].state);
+        };
+        assert_ne!(agent_status, "unknown");
     }
 
     #[test]

@@ -123,13 +123,21 @@ impl AgentStatus {
 /// would. `agent_status` is the one field known to count as alive when
 /// absent, so its `Option` carries the default instead —
 /// `Option`'s own `Deserialize` treats a missing key and an explicit
-/// `null` the same way, matching both cases in one rule.
+/// `null` the same way, matching both cases in one rule. `pane_count`
+/// is herdr's own count of panes in the workspace: `agent_status` is a
+/// single aggregate across every one of them (herdr ranks an idle,
+/// unseen pane above a working one), so a workspace closed on that
+/// status alone can still be tearing down a pane that is genuinely
+/// working. Its `Option` carries the same missing-key default, so a
+/// listing that omits it is not treated as a known single pane.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Workspace {
     pub workspace_id: String,
     pub label: String,
     #[serde(default)]
     pub agent_status: Option<AgentStatus>,
+    #[serde(default)]
+    pub pane_count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -153,6 +161,8 @@ pub struct WorkspaceRef {
     pub workspace_id: Option<String>,
     #[serde(default)]
     pub label: Option<String>,
+    #[serde(default)]
+    pub agent_status: Option<AgentStatus>,
 }
 
 /// `workspace create`'s envelope. Both ids ARE guard-critical here —

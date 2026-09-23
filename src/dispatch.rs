@@ -394,7 +394,7 @@ mod tests {
         ); // check_replaceable_running_workspace's live_workspace
         f.fake.set_response(
             1,
-            r#"{"result": {"workspace": {"label": "home/garden"}}}"#,
+            r#"{"result": {"workspace": {"label": "home/garden", "agent_status": "idle"}}}"#,
             0,
         ); // close_if_ours get
         f.fake.set_response(2, r#"{"result": {}}"#, 0); // close
@@ -424,6 +424,10 @@ mod tests {
     fn fresh_row_running_refuses_a_working_agent_and_never_closes_or_focuses() {
         let f = make_fixture();
         f.campaign("garden");
+        // Owned, so the guard that actually refuses is the status
+        // check, not the ownership check beneath it (which would
+        // refuse just as well on an unrecorded w1).
+        crate::ownership::record("home/garden", "w1").unwrap();
         f.fake.set_response(
             0,
             r#"{"result": {"workspaces": [

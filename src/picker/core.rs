@@ -124,6 +124,10 @@ pub enum Event {
     Esc,
     /// Ctrl-c: close the picker, from the brief step too.
     Quit,
+    /// A key `shell::translate_key` gives no other meaning to. Reaches
+    /// `update` so the top-of-function disarm (any event but `Fresh`
+    /// clears `armed`) still runs for it; does nothing else.
+    Other,
 }
 
 impl AppState {
@@ -311,6 +315,10 @@ pub fn update(mut state: AppState, event: Event) -> AppState {
         Event::Esc | Event::Quit => {
             state.done = Some(Outcome::Cancelled);
         }
+        // The top-of-function disarm already ran for this event (it is
+        // not `Fresh`); nothing else about an unmapped key changes the
+        // picker's state.
+        Event::Other => {}
     }
     state
 }
@@ -1195,6 +1203,21 @@ mod tests {
             Some(Outcome::FreshRunning(live("home/kitchen", "idle")))
         );
 
+        // Moving away and back to the very row Ctrl-f first armed still
+        // disarms: the trip through Down must not survive Up landing
+        // back on the same address. A second Ctrl-f here only re-arms
+        // home/garden; a third fires it.
+        let state = armed(AppState::new(rows.clone()));
+        let state = update(state, Event::Down);
+        let state = update(state, Event::Up);
+        let state = update(state, Event::Fresh);
+        assert_eq!(state.done, None);
+        let state = update(state, Event::Fresh);
+        assert_eq!(
+            state.done,
+            Some(Outcome::FreshRunning(live("home/garden", "idle")))
+        );
+
         // A filter change disarms: the second Ctrl-f only re-arms.
         let state = armed(AppState::new(rows.clone()));
         let state = update(state, Event::Char('x'));
@@ -1208,8 +1231,10 @@ mod tests {
         let state = update(state, Event::Enter);
         assert_eq!(state.armed, None);
 
-        // Esc and Quit disarm the same way.
-        for other in [Event::Esc, Event::Quit] {
+        // Esc, Quit and an unmapped key (`Other`, what `shell::
+        // translate_key` gives a key it has no other meaning for) all
+        // disarm the same way.
+        for other in [Event::Esc, Event::Quit, Event::Other] {
             let state = armed(AppState::new(rows.clone()));
             let state = update(state, other);
             assert_eq!(state.armed, None);

@@ -377,6 +377,7 @@ mod tests {
             workspace_id: "w1".to_string(),
             label: "home/garden".to_string(),
             agent_status,
+            pane_count: None,
         }
     }
 

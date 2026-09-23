@@ -31,6 +31,7 @@ use crate::doubleopen;
 use crate::errors::EstateError;
 use crate::herdrcli::{
     self, AgentStatus, HerdrResult, Workspace, WorkspaceCreateResult, WorkspaceGetResult,
+    WorkspaceRef,
 };
 use crate::name::{self, agent_name};
 use crate::ownership;
@@ -149,11 +150,16 @@ pub enum CloseOutcome {
 }
 
 /// Whether `workspace_id`'s label is still `address`, via a fresh
-/// `workspace get`. Read-only (`check: false`), so it is safe to run
-/// under `--dry-run` too. A failed get (herdr reported an error, or the
-/// response carried no label) counts as "no longer matches" — there is
-/// nothing here to trust either way.
-fn confirm_label_matches(workspace_id: &str, address: &str) -> Result<bool, EstateError> {
+/// `workspace get` -- and, when it is, the same fresh read's
+/// `agent_status` alongside it, for `close_if_ours` to re-check too.
+/// Read-only (`check: false`), so it is safe to run under `--dry-run`
+/// too. A failed get (herdr reported an error, or the response carried
+/// no label) counts as "no longer matches" — there is nothing here to
+/// trust either way.
+fn confirm_label_matches(
+    workspace_id: &str,
+    address: &str,
+) -> Result<Option<WorkspaceRef>, EstateError> {
     let result = herdrcli::call_herdr(
         &[
             "workspace".to_string(),
@@ -162,25 +168,41 @@ fn confirm_label_matches(workspace_id: &str, address: &str) -> Result<bool, Esta
         ],
         false,
     )?;
-    let label = if result.ok {
+    let ws = if result.ok {
         serde_json::from_value::<WorkspaceGetResult>(result.data)
             .ok()
             .and_then(|r| r.workspace)
-            .and_then(|w| w.label)
     } else {
         None
     };
-    Ok(label.as_deref() == Some(address))
+    Ok(ws.filter(|w| w.label.as_deref() == Some(address)))
 }
 
 /// The proven primitive: re-check the label immediately before closing
 /// (herdr's ids are reused across a server restart, so the match a
 /// `workspace list` scan saw a moment ago is not proof enough here), then
-/// close. Never forces anything: a label that no longer matches, or a
-/// close herdr itself reports as failed, both come back `NotConfirmed`
-/// for the caller to refuse on rather than a raw close.
-pub fn close_if_ours(workspace_id: &str, address: &str) -> Result<CloseOutcome, EstateError> {
-    if !confirm_label_matches(workspace_id, address)? {
+/// close. When `require_idle_or_done` is set (the picker's Ctrl-f second
+/// press only), the same fresh read's `agent_status` must still be idle
+/// or done too -- narrowing, as far as a single extra read can, the
+/// window between `check_replaceable_running_workspace`'s read and the
+/// close call itself. Never forces anything: a label that no longer
+/// matches, a status that flipped away from idle or done, or a close
+/// herdr itself reports as failed, all come back `NotConfirmed` for the
+/// caller to refuse on rather than a raw close.
+pub fn close_if_ours(
+    workspace_id: &str,
+    address: &str,
+    require_idle_or_done: bool,
+) -> Result<CloseOutcome, EstateError> {
+    let Some(current) = confirm_label_matches(workspace_id, address)? else {
+        return Ok(CloseOutcome::NotConfirmed);
+    };
+    if require_idle_or_done
+        && !matches!(
+            current.agent_status,
+            Some(AgentStatus::Idle) | Some(AgentStatus::Done)
+        )
+    {
         return Ok(CloseOutcome::NotConfirmed);
     }
     let closed = herdrcli::call_herdr(
@@ -294,12 +316,17 @@ fn check_live_workspace(address: &str) -> Result<Option<Workspace>, EstateError>
 }
 
 /// The picker's Ctrl-f second press only: a live, owned workspace whose
-/// freshly re-read `agent_status` is exactly idle or done can be
-/// replaced too, closed and recreated the same way a dormant one is.
-/// Everything else refuses: no live workspace at all, one herdr-estate
-/// did not create (same message and guard `check_live_workspace` uses),
-/// or an agent that is working, blocked, or any other status that isn't
-/// idle or done. Never called from the CLI path, which keeps refusing a
+/// freshly re-read `agent_status` is exactly idle or done, and that
+/// carries exactly one pane, can be replaced too, closed and recreated
+/// the same way a dormant one is. Everything else refuses: no live
+/// workspace at all, one herdr-estate did not create (same message and
+/// guard `check_live_workspace` uses), an agent that is working,
+/// blocked, or any other status that isn't idle or done, or more than
+/// one pane -- `agent_status` is a single aggregate over every pane in
+/// the workspace, so a second, working pane can still be idle-or-done
+/// on that aggregate (herdr ranks an idle, unseen pane above a working
+/// one), and a close tears down every pane, not just the one this row
+/// names. Never called from the CLI path, which keeps refusing a
 /// running agent through `check_live_workspace` unchanged.
 fn check_replaceable_running_workspace(address: &str) -> Result<Workspace, EstateError> {
     let ws = doubleopen::live_workspace(address)?
@@ -308,6 +335,14 @@ fn check_replaceable_running_workspace(address: &str) -> Result<Workspace, Estat
         return Err(EstateError::Guard(format!(
             "{address}: a workspace with this label exists that herdr-estate did not create. Close it yourself"
         )));
+    }
+    if let Some(count) = ws.pane_count {
+        if count > 1 {
+            return Err(EstateError::Guard(format!(
+                "{address}: workspace {} carries {count} panes, not just this one; refusing to stop it",
+                ws.workspace_id
+            )));
+        }
     }
     match &ws.agent_status {
         Some(AgentStatus::Idle) | Some(AgentStatus::Done) => Ok(ws),
@@ -342,7 +377,12 @@ fn open_workspace(
             "{address}: closing {}, {close_reason}",
             ws.workspace_id
         ));
-        match close_if_ours(&ws.workspace_id, address)? {
+        // Only the picker's Ctrl-f second press names its close reason
+        // this way; the ordinary resume/fresh close never requires the
+        // agent to still be idle or done, since it never required that
+        // to begin with.
+        let require_idle_or_done = close_reason == CLOSE_REASON_STOPPING;
+        match close_if_ours(&ws.workspace_id, address, require_idle_or_done)? {
             CloseOutcome::Closed => {
                 ownership::forget(&ws.workspace_id).map_err(|e| {
                     EstateError::Config(format!("could not update the ownership record: {e}"))
@@ -419,7 +459,7 @@ fn dry_run_plan(
     let close_cmd = match ws {
         None => None,
         Some(w) => {
-            if confirm_label_matches(&w.workspace_id, address)? {
+            if confirm_label_matches(&w.workspace_id, address)?.is_some() {
                 Some(vec![
                     "workspace".to_string(),
                     "close".to_string(),
@@ -549,7 +589,14 @@ pub(crate) fn fresh_with_ids_stop_running(
     address: &str,
 ) -> Result<VerbResult, EstateError> {
     let campaign = campaign::resolve(estates, address, false)?;
-    let old_id = fresh_registry_guard(&campaign, address)?;
+    // Not `fresh_registry_guard`: the conversation this stops is, by
+    // definition, attached and live right now (that is what idle or
+    // done means), so its own pid is always a registry holder of
+    // itself. The guard below exists to catch that same conversation
+    // open in some OTHER pane while this address sits dormant -- a
+    // question that does not apply to the one live pane this verb is
+    // about to close and replace.
+    let old_id = continuity::latest_conversation(&campaign.dir);
     let ws = check_replaceable_running_workspace(address)?;
     fresh_open(
         &campaign,
@@ -561,12 +608,12 @@ pub(crate) fn fresh_with_ids_stop_running(
     )
 }
 
-/// The claude-kind double-open guard `fresh_with_ids` and
-/// `fresh_with_ids_stop_running` both run first, before either reads a
-/// live workspace: the conversation about to be retired must not
-/// already be open in some other pane. Returns the conversation id to
-/// retire, if any, for the progress line and the close-reason wording
-/// further down to use.
+/// The claude-kind double-open guard `fresh_with_ids` runs first, before
+/// it reads a live workspace: the conversation about to be retired must
+/// not already be open in some other pane. `fresh_with_ids_stop_running`
+/// does not call this -- its own comment says why. Returns the
+/// conversation id to retire, if any, for the progress line and the
+/// close-reason wording further down to use.
 fn fresh_registry_guard(campaign: &Campaign, address: &str) -> Result<Option<String>, EstateError> {
     let old_id = continuity::latest_conversation(&campaign.dir);
     if let Some(old_id) = &old_id {
@@ -1007,7 +1054,7 @@ mod tests {
         fake.set_response(1, r#"{"result": {}}"#, 0);
         let _g = EnvGuard::set(&[("HERDR_BIN_PATH", fake.bin_path().to_str().unwrap())]);
         assert_eq!(
-            close_if_ours("w1", "home/garden").unwrap(),
+            close_if_ours("w1", "home/garden", false).unwrap(),
             CloseOutcome::Closed
         );
         assert_eq!(fake.call_count(), 2);
@@ -1024,10 +1071,43 @@ mod tests {
         );
         let _g = EnvGuard::set(&[("HERDR_BIN_PATH", fake.bin_path().to_str().unwrap())]);
         assert_eq!(
-            close_if_ours("w1", "home/garden").unwrap(),
+            close_if_ours("w1", "home/garden", false).unwrap(),
             CloseOutcome::NotConfirmed
         );
         assert_eq!(fake.call_count(), 1); // only the get, never the close
+    }
+
+    #[test]
+    fn close_if_ours_skips_when_required_idle_or_done_but_the_fresh_read_says_working() {
+        let fake = FakeHerdr::new();
+        fake.set_response(
+            0,
+            r#"{"result": {"workspace": {"label": "home/garden", "agent_status": "working"}}}"#,
+            0,
+        );
+        let _g = EnvGuard::set(&[("HERDR_BIN_PATH", fake.bin_path().to_str().unwrap())]);
+        assert_eq!(
+            close_if_ours("w1", "home/garden", true).unwrap(),
+            CloseOutcome::NotConfirmed
+        );
+        assert_eq!(fake.call_count(), 1); // only the get, never the close
+    }
+
+    #[test]
+    fn close_if_ours_closes_when_required_idle_or_done_and_the_fresh_read_still_agrees() {
+        let fake = FakeHerdr::new();
+        fake.set_response(
+            0,
+            r#"{"result": {"workspace": {"label": "home/garden", "agent_status": "done"}}}"#,
+            0,
+        );
+        fake.set_response(1, r#"{"result": {}}"#, 0);
+        let _g = EnvGuard::set(&[("HERDR_BIN_PATH", fake.bin_path().to_str().unwrap())]);
+        assert_eq!(
+            close_if_ours("w1", "home/garden", true).unwrap(),
+            CloseOutcome::Closed
+        );
+        assert_eq!(fake.argv(1), vec!["workspace", "close", "w1"]);
     }
 
     // --- created_ids ---
@@ -1503,7 +1583,7 @@ mod tests {
         ); // live_workspace, inside check_replaceable_running_workspace
         f.fake.set_response(
             1,
-            r#"{"result": {"workspace": {"label": "home/garden"}}}"#,
+            r#"{"result": {"workspace": {"label": "home/garden", "agent_status": "idle"}}}"#,
             0,
         ); // close_if_ours get
         f.fake.set_response(2, r#"{"result": {}}"#, 0); // close
@@ -1541,7 +1621,7 @@ mod tests {
         );
         f.fake.set_response(
             1,
-            r#"{"result": {"workspace": {"label": "home/garden"}}}"#,
+            r#"{"result": {"workspace": {"label": "home/garden", "agent_status": "done"}}}"#,
             0,
         );
         f.fake.set_response(2, r#"{"result": {}}"#, 0);
@@ -1551,6 +1631,68 @@ mod tests {
         let result = fresh_with_ids_stop_running(&f.estates, "home/garden").unwrap();
         assert_eq!(result.exit_code, 0);
         assert_eq!(f.fake.argv(2), vec!["workspace", "close", "w1"]);
+    }
+
+    #[test]
+    fn stop_running_succeeds_though_the_retiring_conversation_is_its_own_live_registry_holder() {
+        // The idle agent being stopped is, by definition, still
+        // attached: `~/.claude/sessions/<pid>.json` for its own live
+        // pid names the very conversation this call is about to
+        // retire. That must not read as a double-open in some other
+        // pane -- if it did, this path could never fire for a claude
+        // campaign, the default kind.
+        let f = make_fixture("claude");
+        continuity::append(&f.cdir, "old-sid").unwrap();
+        ownership::record("home/garden", "w1").unwrap();
+        let sessions = crate::paths::home_dir().join(".claude").join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(
+            sessions.join(format!("{}.json", std::process::id())),
+            serde_json::json!({"sessionId": "old-sid", "name": "garden"}).to_string(),
+        )
+        .unwrap();
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "idle"}
+            ]}}"#,
+            0,
+        );
+        f.fake.set_response(
+            1,
+            r#"{"result": {"workspace": {"label": "home/garden", "agent_status": "idle"}}}"#,
+            0,
+        );
+        f.fake.set_response(2, r#"{"result": {}}"#, 0);
+        f.fake.set_response(3, CREATE_OK, 0);
+        f.fake.set_response(4, r#"{"result": {}}"#, 0);
+
+        let result = fresh_with_ids_stop_running(&f.estates, "home/garden").unwrap();
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(f.fake.argv(2), vec!["workspace", "close", "w1"]);
+    }
+
+    #[test]
+    fn stop_running_refuses_a_workspace_carrying_more_than_one_pane() {
+        // agent_status is a single aggregate over every pane in the
+        // workspace, so "idle" here could still be a second, genuinely
+        // working pane outranked in that aggregate. A close tears down
+        // every pane, so this must refuse before ever touching one.
+        let f = make_fixture("claude");
+        ownership::record("home/garden", "w1").unwrap();
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "idle", "pane_count": 2}
+            ]}}"#,
+            0,
+        );
+        let err = fresh_with_ids_stop_running(&f.estates, "home/garden").unwrap_err();
+        assert!(
+            matches!(err, EstateError::Guard(ref msg) if msg.contains("2 panes")),
+            "{err:?}"
+        );
+        assert_eq!(f.fake.call_count(), 1);
     }
 
     #[test]
@@ -1615,6 +1757,31 @@ mod tests {
     }
 
     #[test]
+    fn stop_running_refuses_on_a_missing_prompt_file_before_closing_anything() {
+        let mut f = make_fixture("claude");
+        if let Some(toml::Value::Table(row)) = f.estates.get_mut("home") {
+            row.insert(
+                "prompts".to_string(),
+                toml::Value::Array(vec![toml::Value::String("prompts/missing.md".to_string())]),
+            );
+        }
+        ownership::record("home/garden", "w1").unwrap();
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "idle"}
+            ]}}"#,
+            0,
+        );
+        assert!(matches!(
+            fresh_with_ids_stop_running(&f.estates, "home/garden"),
+            Err(EstateError::Config(_))
+        ));
+        // Only the read that found the idle workspace; nothing closed.
+        assert_eq!(f.fake.call_count(), 1);
+    }
+
+    #[test]
     fn stop_running_unconfirmed_close_creates_nothing() {
         let f = make_fixture("claude");
         ownership::record("home/garden", "w1").unwrap();
@@ -1643,8 +1810,12 @@ mod tests {
         // The picker's second-press path above is never what the CLI's
         // `fresh` reaches: it still goes through `check_live_workspace`,
         // which refuses any live agent_status other than "unknown",
-        // idle included.
+        // idle included. Ownership is recorded here so the alive check
+        // is what actually refuses, not the ownership check beneath it
+        // (which would refuse just as well on an unrecorded w1, hiding
+        // whether the running-agent guard fired at all).
         let f = make_fixture("claude");
+        ownership::record("home/garden", "w1").unwrap();
         f.fake.set_response(
             0,
             r#"{"result": {"workspaces": [
@@ -1653,7 +1824,10 @@ mod tests {
             0,
         );
         let err = fresh(&f.estates, "home/garden", false).unwrap_err();
-        assert!(matches!(err, EstateError::Guard(_)));
+        assert!(
+            matches!(err, EstateError::Guard(ref msg) if msg.contains("running agent")),
+            "{err:?}"
+        );
         assert_eq!(f.fake.call_count(), 1);
     }
 
