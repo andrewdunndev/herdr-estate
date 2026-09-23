@@ -2,62 +2,30 @@
 
 ## Unreleased
 
-- A picker filter `estate/name` that names no campaign offers
-  `+ create`: Enter asks for a one-line brief, and Enter again writes
-  the campaign's `campaign.md` and `log.md`, uncommitted, then starts
-  it fresh. Nothing is written while any workspace carries the address,
-  and nothing already at the path is adopted. `herdr-estate create
-  <address> --brief <text>` writes the same two files and calls no
-  herdr. A paste into the picker types only its first line.
-- Ctrl-f in the picker starts a fresh conversation on the selected row
-  instead of resuming it. It does nothing on a row whose agent is
-  running, and the detail line says so. Alt and Cmd chords no longer
-  type into the filter or act as picker keys.
-- Each picker row shows its campaign's brief: the first body line of
-  its campaign.md that isn't a heading. `list` output is unchanged.
-- The picker takes herdr's own look, from its pane navigator: a filter
-  line with a count, a rule, rows with herdr's status glyphs, a detail
-  line saying what Enter will do, and key hints. Every cell is painted
-  herdr's panel colour and column 0 stays blank, so the popup's edge
-  reads as one surface and text no longer touches its left border.
-  Colours and glyphs follow herdr's config (`[theme]`,
-  `[ui].status_indicators`), though `auto_switch` always shows the
-  dark theme. The popup title is now `campaigns`.
-- The `pick` action opens the picker popup. herdr runs an action with
-  no terminal, so a key bound to it failed with "could not start the
-  terminal". The README binds it to `prefix+shift+e`, a key herdr
-  leaves free; its old suggestions `prefix+r` and `prefix+p` shadowed
-  herdr's `resize_mode` and `previous_tab`.
-- `resume` and `fresh` print a line to stderr before each step that
-  changes the board, including the wait while `agent start` blocks
-  until the agent is ready, so the picker popup no longer sits blank
-  through it.
-- A failed dispatch from the picker holds its error in the popup until
-  a key press instead of closing with it. Keys typed during the wait
-  are discarded first, so they can't dismiss it unread.
-- A failed herdr call's message masks estate `env` values, as a
-  `--dry-run` plan does. A failed `workspace create` used to print them
-  in the clear.
-- Every run appends its argv, how it was launched, its progress lines
-  and any error to `events.log` in the state dir: one timestamped
-  record across the picker popup, plugin actions and the shell.
+## v0.1.0 - 2026-09-23
 
-## v0.1.0
+First release. Long-running campaigns for herdr: threads of agent work,
+addressed as estate/campaign, that outlive every conversation.
 
-First release. A herdr plugin that gives agent work a durable address:
-`estate/campaign`, resolved from one estate table and one campaign file.
-
-- Verbs `resume`, `fresh` and `list`, addressed by `estate/campaign`.
-  Resume reopens the campaign's latest conversation; fresh starts a new one.
-- Guards on both verbs: ownership by recorded workspace id, an alive check
-  that treats only `unknown` as dead, refusal on a duplicated label, and a
-  stop when a close cannot be confirmed. The plugin never closes a
-  workspace it did not create.
-- A continuity log per campaign, one line per launch, read on resume.
-- A popup picker (`pick`) that filters campaigns by address and dispatches
-  through the same verbs and guards, re-reading the workspace at Enter.
-- Optional worktrees, ensure-only with plain git.
-- Estate-level paths and per-kind flags as defaults, overridden key by key
-  in the campaign file.
-- Three direct dependencies for the verbs; the picker adds ratatui and
-  crossterm.
+- `resume` continues a campaign's latest conversation, or starts one if
+  none is on record; `fresh` retires it and starts a new one at the
+  same address. Both refuse on a duplicate label, a running agent, a
+  workspace they didn't create or an unconfirmed close.
+- `list` prints every campaign. `create <address> --brief <text>`
+  writes a new campaign's `campaign.md` and `log.md`, uncommitted, and
+  refuses to adopt anything already at the path.
+- `pick` opens a popup picker drawn in herdr's style and theme, each
+  row showing its campaign's brief. Enter focuses, resumes or starts
+  fresh; ctrl+f starts fresh; a filter `estate/name` naming no campaign
+  offers `+ create`. A failed dispatch stays on screen until a key
+  press.
+- A campaign's `sessions.log` keeps one line per conversation. Optional
+  worktrees are made with plain git and never removed.
+- Steps that change the board print progress lines, and every run is
+  logged to `events.log` in the state dir.
+- Estate `env` values are masked in `--dry-run` plans and in the
+  message of a failed herdr call.
+- `--version` prints the version.
+- herdr builds the plugin with `cargo build --release --locked`.
+- Each tagged release carries cosign-signed binaries for Linux (x86_64,
+  arm64) and macOS (arm64), with CycloneDX SBOMs and SLSA provenance.
