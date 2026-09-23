@@ -69,6 +69,10 @@ pub enum Outcome {
     Selected(Row),
     /// Ctrl-f: start a fresh conversation on the row instead.
     Fresh(Row),
+    /// Ctrl-f's second press, armed on an idle or done row whose agent
+    /// is still attached: stop that agent, then start a fresh
+    /// conversation the same way `Fresh` does.
+    FreshRunning(Row),
     /// Enter on the brief step: create `address`, the filter, with
     /// `brief`, trimmed, then start it fresh.
     Create {
@@ -101,6 +105,11 @@ pub struct AppState {
     brief: Option<String>,
     /// Enter was pressed on an empty brief: the hint asks for one.
     brief_wanted: bool,
+    /// The address Ctrl-f armed on its first press, on a row whose
+    /// agent is idle or done: a second Ctrl-f on that same row fires,
+    /// as long as it still reads idle or done. Any other key, a
+    /// selection move, or a filter change disarms.
+    armed: Option<String>,
     pub done: Option<Outcome>,
 }
 
@@ -128,6 +137,7 @@ impl AppState {
             estates: BTreeMap::new(),
             brief: None,
             brief_wanted: false,
+            armed: None,
             done: None,
         }
     }
@@ -180,10 +190,20 @@ fn selection_at(filtered: &[&Row], i: usize) -> Selection {
 }
 
 /// A live row whose agent is running: anything but "unknown", as
-/// `doubleopen::workspace_alive` decides. Fresh there would only be
-/// refused by the verb, so Ctrl-f does nothing on it.
+/// `doubleopen::workspace_alive` decides. An idle or done one still
+/// among these is where Ctrl-f's double press applies; anything else
+/// running refuses outright.
 fn running(row: &Row) -> bool {
     matches!(&row.state, RowState::Live { agent_status, .. } if agent_status != "unknown")
+}
+
+/// Whether Ctrl-f's double press applies to `row` at all: a running row
+/// (so `running(row)` is already true) whose wire status is exactly
+/// idle or done. Working, blocked, or any other running status refuses
+/// outright instead of arming.
+fn arm_eligible(row: &Row) -> bool {
+    matches!(&row.state, RowState::Live { agent_status, .. }
+        if matches!(Status::from_wire(agent_status), Status::Idle | Status::Done))
 }
 
 /// After the filter text changes, keep the current selection while it is
@@ -226,6 +246,13 @@ pub fn update(mut state: AppState, event: Event) -> AppState {
         }
         return state;
     }
+    // Ctrl-f's arm survives only a second, immediately following
+    // Ctrl-f on the same row: a filter edit, a selection move, Enter,
+    // Esc or Quit all disarm. The `Fresh` branch below re-arms or
+    // fires as it needs to; every other branch just needs this clear.
+    if !matches!(event, Event::Fresh) {
+        state.armed = None;
+    }
     match event {
         Event::Char(c) => {
             state.filter.push(c);
@@ -259,7 +286,26 @@ pub fn update(mut state: AppState, event: Event) -> AppState {
                 Some(Some(row)) if !running(row) => {
                     state.done = Some(Outcome::Fresh((*row).clone()));
                 }
-                _ => {}
+                // A running row that is idle or done: arm on the first
+                // Ctrl-f, fire on the second. `arm_eligible` reads the
+                // row's status fresh from `state.rows` right here, so
+                // a fire always re-checks the current status rather
+                // than trusting whatever it was when armed.
+                Some(Some(row)) if arm_eligible(row) => {
+                    if state.armed.as_deref() == Some(row.address.as_str()) {
+                        state.done = Some(Outcome::FreshRunning((*row).clone()));
+                        state.armed = None;
+                    } else {
+                        state.armed = Some(row.address.clone());
+                    }
+                }
+                // A running row that is working, blocked, or any other
+                // status: refused, fail closed. Also where a status
+                // flip since the first press lands, so an arm on this
+                // row from before it clears here rather than firing.
+                _ => {
+                    state.armed = None;
+                }
             }
         }
         Event::Esc | Event::Quit => {
@@ -675,6 +721,7 @@ pub fn view(state: &AppState, width: usize, height: usize, ind: Indicators) -> V
     if tiers.detail {
         lines.push(detail_line(
             selected_idx.and_then(|i| filtered.get(i).copied()),
+            state.armed.as_deref(),
             width,
         ));
     }
@@ -878,11 +925,11 @@ fn create_line(address: &str, width: usize, selected: bool) -> ViewLine {
 /// Row H−2: " {address} · {action} · {fresh}" for the selected row, the
 /// navigator's detail line (overlays.rs:920-930). The action says what
 /// Enter will do, in `dispatch::open_row`'s terms, and the last part
-/// whether Ctrl-f will start fresh or, on a running agent, why not.
-/// Hard-clipped with no "…", as herdr clips its own detail line
-/// (`put_text`, render.rs:367-372): the ellipsis is only for a row's
-/// address and brief. Blank when no row is selected.
-fn detail_line(row: Option<&Row>, width: usize) -> ViewLine {
+/// whether Ctrl-f will start fresh, is armed for a second press, or
+/// refuses and why. Hard-clipped with no "…", as herdr clips its own
+/// detail line (`put_text`, render.rs:367-372): the ellipsis is only
+/// for a row's address and brief. Blank when no row is selected.
+fn detail_line(row: Option<&Row>, armed: Option<&str>, width: usize) -> ViewLine {
     let Some(row) = row else {
         return LineBuilder::new(width).finish(false);
     };
@@ -891,12 +938,27 @@ fn detail_line(row: Option<&Row>, width: usize) -> ViewLine {
         RowState::Dormant { last } => format!("resume from {last}"),
         RowState::New => "start fresh".to_string(),
     };
-    let fresh = if running(row) {
-        "already running"
-    } else {
-        "fresh ctrl+f"
-    };
+    let fresh = fresh_tail(row, armed == Some(row.address.as_str()));
     note_line(&format!("{} · {action} · {fresh}", row.address), width)
+}
+
+/// The detail line's last segment, for `row`: what Ctrl-f does, or
+/// refuses to, and why. `armed` is whether Ctrl-f's first press already
+/// armed this exact row for a second-press stop-and-fresh.
+fn fresh_tail(row: &Row, armed: bool) -> &'static str {
+    if !running(row) {
+        return "fresh ctrl+f";
+    }
+    let RowState::Live { agent_status, .. } = &row.state else {
+        return "fresh ctrl+f"; // unreachable: running(row) already requires Live.
+    };
+    match Status::from_wire(agent_status) {
+        Status::Idle | Status::Done if armed => "ctrl+f again: stop agent, start fresh",
+        Status::Idle | Status::Done => "fresh ctrl+f",
+        Status::Working => "agent working, wait or exit",
+        Status::Blocked => "agent blocked, wait or exit",
+        Status::Unknown => "agent busy, wait or exit",
+    }
 }
 
 /// Row H−1: the key hints. When the footer is too narrow for all of
@@ -1075,12 +1137,100 @@ mod tests {
             let state = update(AppState::new(vec![row.clone()]), Event::Fresh);
             assert_eq!(state.done, Some(Outcome::Fresh(row)));
         }
-        // A running agent: the verb would refuse, so the key does
-        // nothing. Nor does it with nothing selected.
-        let running = AppState::new(vec![live("home/garden", "idle")]);
+        // Working: the verb would refuse outright, so the key does
+        // nothing (idle and done arm instead; that is its own test).
+        // Nor does it with nothing selected.
+        let running = AppState::new(vec![live("home/garden", "working")]);
         assert_eq!(update(running, Event::Fresh).done, None);
         let none = typed(AppState::new(sample_rows()), "zzz");
         assert_eq!(update(none, Event::Fresh).done, None);
+    }
+
+    #[test]
+    fn ctrl_f_arms_idle_or_done_and_fires_on_the_second_press() {
+        for status in ["idle", "done"] {
+            let state = AppState::new(vec![live("home/garden", status)]);
+            let state = update(state, Event::Fresh);
+            // Armed: no outcome yet, the row stays open.
+            assert_eq!(state.done, None);
+            let state = update(state, Event::Fresh);
+            assert_eq!(
+                state.done,
+                Some(Outcome::FreshRunning(live("home/garden", status)))
+            );
+        }
+    }
+
+    #[test]
+    fn ctrl_f_refuses_working_blocked_and_any_other_running_status() {
+        for status in ["working", "blocked", "starting"] {
+            let state = AppState::new(vec![live("home/garden", status)]);
+            let state = update(state, Event::Fresh);
+            assert_eq!(state.done, None, "status {status}");
+            // A second press is exactly as refused as the first: never
+            // arms, so it never fires either.
+            let state = update(state, Event::Fresh);
+            assert_eq!(state.done, None, "status {status}");
+        }
+    }
+
+    #[test]
+    fn ctrl_f_arm_disarms_on_a_selection_move_a_filter_change_or_another_key() {
+        let rows = vec![live("home/garden", "idle"), live("home/kitchen", "idle")];
+        let armed = |mut state: AppState| {
+            state = update(state, Event::Fresh);
+            assert_eq!(state.done, None);
+            state
+        };
+
+        // A selection move disarms: firing again now arms the newly
+        // selected row instead of the one Ctrl-f first armed.
+        let state = armed(AppState::new(rows.clone()));
+        let state = update(state, Event::Down);
+        let state = update(state, Event::Fresh);
+        assert_eq!(state.done, None);
+        let state = update(state, Event::Fresh);
+        assert_eq!(
+            state.done,
+            Some(Outcome::FreshRunning(live("home/kitchen", "idle")))
+        );
+
+        // A filter change disarms: the second Ctrl-f only re-arms.
+        let state = armed(AppState::new(rows.clone()));
+        let state = update(state, Event::Char('x'));
+        let state = update(state, Event::Backspace);
+        let state = update(state, Event::Fresh);
+        assert_eq!(state.done, None);
+
+        // Any other key disarms too: Enter here, which also exits the
+        // picker, but the arm is gone regardless of what Enter does.
+        let state = armed(AppState::new(rows.clone()));
+        let state = update(state, Event::Enter);
+        assert_eq!(state.armed, None);
+
+        // Esc and Quit disarm the same way.
+        for other in [Event::Esc, Event::Quit] {
+            let state = armed(AppState::new(rows.clone()));
+            let state = update(state, other);
+            assert_eq!(state.armed, None);
+        }
+    }
+
+    #[test]
+    fn ctrl_f_second_press_re_checks_status_and_refuses_a_flip_to_ineligible() {
+        // Armed on an idle row; the row's own status then flips away
+        // from idle or done -- a list refresh landing between the two
+        // presses, which the picker's snapshot rows never do on their
+        // own, but the guard holds regardless of how it happens. The
+        // second press re-reads the row from `state`, not a cached
+        // status, so it refuses instead of firing on the stale arm.
+        let mut state = AppState::new(vec![live("home/garden", "idle")]);
+        state = update(state, Event::Fresh);
+        assert_eq!(state.armed.as_deref(), Some("home/garden"));
+        state.rows[0] = live("home/garden", "working");
+        state = update(state, Event::Fresh);
+        assert_eq!(state.done, None);
+        assert_eq!(state.armed, None);
     }
 
     #[test]
@@ -1207,7 +1357,7 @@ mod tests {
                 String::new(),
                 String::new(),
                 String::new(),
-                "  home/garden · focus w-home/garden · already running".to_string(),
+                "  home/garden · focus w-home/garden · agent working, wait or ex".to_string(),
                 "  filter type · move ↑↓ · open enter · fresh ctrl+f · close esc".to_string(),
             ]
         );
@@ -1742,16 +1892,16 @@ mod tests {
     #[test]
     fn the_detail_line_says_what_enter_does_with_the_selected_row() {
         let mut state = AppState::new(vec![
-            live("home/garden", "idle"),
+            live("home/garden", "working"),
             dormant("home/kitchen", "2026-09-10"),
             new_row("home/attic"),
         ]);
-        let detail = |state: &AppState| view(state, 60, 7, Indicators::Dots).lines[5].plain();
-        // A running agent says why Ctrl-f does nothing; every other row
+        let detail = |state: &AppState| view(state, 68, 7, Indicators::Dots).lines[5].plain();
+        // A working agent says why Ctrl-f does nothing; every other row
         // offers it.
         assert_eq!(
             detail(&state),
-            "  home/garden · focus w-home/garden · already running"
+            "  home/garden · focus w-home/garden · agent working, wait or exit"
         );
         state = update(state, Event::Down);
         assert_eq!(
@@ -1769,6 +1919,39 @@ mod tests {
         assert_eq!(
             view(&narrow, 20, 7, Indicators::Dots).lines[5].plain(),
             "  home/attic · star"
+        );
+    }
+
+    #[test]
+    fn the_detail_line_names_the_ctrl_f_arm_state_on_idle_and_done() {
+        let detail = |status: &str, armed_first| {
+            let mut state = AppState::new(vec![live("home/garden", status)]);
+            if armed_first {
+                state = update(state, Event::Fresh);
+            }
+            view(&state, 80, 7, Indicators::Dots).lines[5].plain()
+        };
+        for status in ["idle", "done"] {
+            assert_eq!(
+                detail(status, false),
+                "  home/garden · focus w-home/garden · fresh ctrl+f"
+            );
+            assert_eq!(
+                detail(status, true),
+                "  home/garden · focus w-home/garden · ctrl+f again: stop agent, start fresh"
+            );
+        }
+        assert_eq!(
+            detail("working", false),
+            "  home/garden · focus w-home/garden · agent working, wait or exit"
+        );
+        assert_eq!(
+            detail("blocked", false),
+            "  home/garden · focus w-home/garden · agent blocked, wait or exit"
+        );
+        assert_eq!(
+            detail("starting", false),
+            "  home/garden · focus w-home/garden · agent busy, wait or exit"
         );
     }
 
