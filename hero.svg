@@ -1,12 +1,12 @@
-<svg viewBox="0 0 1200 430" width="1200" height="430" font-family="Helvetica, Arial, sans-serif" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="herdr-estate hero: Durable campaigns for herdr.">
+<svg viewBox="0 0 1200 430" width="1200" height="430" font-family="Helvetica, Arial, sans-serif" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="herdr-estate hero: Durable campaigns for herdr. A campaign tree: the estate repo holds one directory per campaign, each carrying campaign.md, log.md, sessions.log and notes. Below it, one campaign over weeks: many short conversations separated by fresh starts, and one continuous log that carries the work across them.">
   <rect x="0" y="0" width="1200" height="430" fill="#f4f4f4"/>
   <g font-family="Helvetica, Arial, sans-serif">
   <text x="60" y="34" font-size="10" font-weight="600" font-family="Menlo, monospace" fill="#707070" letter-spacing="1.4">HERDR-ESTATE · CAMPAIGN CONTINUITY · HERDR PLUGIN</text>
   <line x1="60" y1="48" x2="1140" y2="48" stroke="#e0e0e0" stroke-width="1"/>
   <text x="60" y="138" font-size="72" font-weight="700" fill="#4a6741" letter-spacing="-2">herdr-estate</text>
-  <text x="60" y="172" font-size="14" fill="#404040">herdr-estate gives herdr durable campaigns: threads of</text>
-  <text x="60" y="192" font-size="14" fill="#404040">agent work addressed as estate/campaign, that resume</text>
-  <text x="60" y="212" font-size="14" fill="#404040">where they left off, not cold.</text>
+  <text x="60" y="172" font-size="14" fill="#404040">herdr-estate gives herdr long-running campaigns: threads of</text>
+  <text x="60" y="192" font-size="14" fill="#404040">agent work, addressed as estate/campaign, that outlive every</text>
+  <text x="60" y="212" font-size="14" fill="#404040">conversation. Start fresh often; the log carries the work.</text>
   <g transform="translate(110 240) scale(2.2)">
   <g stroke="#4a6741" fill="none" stroke-linecap="round">
     <rect x="10" y="10" width="44" height="44" stroke-width="1.8" rx="1"/>
@@ -16,28 +16,51 @@
   <rect x="14" y="14" width="14" height="14" fill="#4a6741"/>
   <rect x="36" y="36" width="14" height="14" fill="#4a6741"/>
   </g>
-  <text x="560" y="72" font-size="10" font-weight="700" font-family="Menlo, monospace" fill="#707070" letter-spacing="1.4">FLOW</text>
-  <text x="850" y="72" font-size="10" font-weight="700" font-family="Menlo, monospace" fill="#707070" letter-spacing="1.4">DISCIPLINE</text>
-  <rect x="560" y="84" width="270" height="130" rx="3" fill="#ffffff" stroke="#e0e0e0" stroke-width="1"/>
-  <text x="578" y="106" font-size="10" font-weight="700" font-family="Menlo, monospace" fill="#707070" letter-spacing="1.4">IN</text>
-  <text x="578" y="152" font-size="32" font-weight="700" fill="#4a6741" letter-spacing="-0.5">resume/fresh</text>
-  <text x="578" y="178" font-size="11" fill="#404040">the only two verbs that open a workspace</text>
-  <text x="578" y="200" font-size="9" font-family="Menlo, monospace" fill="#707070" letter-spacing="0.6">ESTATE/CAMPAIGN · DRY-RUN</text>
-  <rect x="850" y="84" width="270" height="130" rx="3" fill="#ffffff" stroke="#e0e0e0" stroke-width="1"/>
-  <text x="868" y="106" font-size="10" font-weight="700" font-family="Menlo, monospace" fill="#707070" letter-spacing="1.4">POSTURE</text>
-  <text x="868" y="152" font-size="32" font-weight="700" fill="#4a6741" letter-spacing="-0.5">four guards</text>
-  <text x="868" y="178" font-size="11" fill="#404040">refuses a workspace it didn't create</text>
-  <text x="868" y="200" font-size="8" font-family="Menlo, monospace" fill="#707070" letter-spacing="0.3">DUPLICATE · LIVE · OWNERSHIP · UNCONFIRMED</text>
-  <rect x="560" y="224" width="270" height="130" rx="3" fill="#ffffff" stroke="#e0e0e0" stroke-width="1"/>
-  <text x="578" y="246" font-size="10" font-weight="700" font-family="Menlo, monospace" fill="#707070" letter-spacing="1.4">OUT</text>
-  <text x="578" y="292" font-size="32" font-weight="700" fill="#4a6741" letter-spacing="-0.5">a workspace</text>
-  <text x="578" y="318" font-size="11" fill="#404040">cwd from an optional worktree</text>
-  <text x="578" y="340" font-size="9" font-family="Menlo, monospace" fill="#707070" letter-spacing="0.6">WORKSPACE · WORKTREE OPTIONAL</text>
-  <rect x="850" y="224" width="270" height="130" rx="3" fill="#ffffff" stroke="#e0e0e0" stroke-width="1"/>
-  <text x="868" y="246" font-size="10" font-weight="700" font-family="Menlo, monospace" fill="#707070" letter-spacing="1.4">LIFETIME</text>
-  <text x="868" y="292" font-size="32" font-weight="700" fill="#4a6741" letter-spacing="-0.5">its own log</text>
-  <text x="868" y="318" font-size="11" fill="#404040">not herdr's resume</text>
-  <text x="868" y="340" font-size="9" font-family="Menlo, monospace" fill="#707070" letter-spacing="0.6">SESSIONS.LOG · MANUAL REMOVAL</text>
+  <!-- right: a campaign tree and one campaign over time, in place of the four tiles -->
+  <text x="560" y="72" font-size="10" font-weight="700" font-family="Menlo, monospace" fill="#707070" letter-spacing="1.4">CAMPAIGN TREE</text>
+  <text x="1120" y="72" text-anchor="end" font-size="10" font-weight="700" font-family="Menlo, monospace" fill="#707070" letter-spacing="1.4">ONE CAMPAIGN · MANY CONVERSATIONS</text>
+  <rect x="560" y="84" width="560" height="270" rx="3" fill="#ffffff" stroke="#e0e0e0" stroke-width="1"/>
+  <g stroke="#707070" stroke-width="1" fill="none">
+    <path d="M590 114 V126 H600"/>
+    <path d="M612 136 V148 H622"/>
+    <path d="M634 158 V236 M634 170 H644 M634 192 H644 M634 214 H644 M634 236 H644"/>
+  </g>
+  <text x="584" y="108" font-size="13" font-weight="600" font-family="Menlo, monospace" fill="#0a0a0a">~/estates/home/</text>
+  <text x="606" y="130" font-size="13" font-family="Menlo, monospace" fill="#0a0a0a">campaigns/</text>
+  <text x="628" y="152" font-size="13" font-weight="700" font-family="Menlo, monospace" fill="#4a6741">garden/</text>
+  <text x="650" y="174" font-size="13" font-family="Menlo, monospace" fill="#0a0a0a">campaign.md</text>
+  <text x="650" y="196" font-size="13" font-family="Menlo, monospace" fill="#0a0a0a">log.md</text>
+  <text x="650" y="218" font-size="13" font-family="Menlo, monospace" fill="#0a0a0a">sessions.log</text>
+  <text x="650" y="240" font-size="13" font-family="Menlo, monospace" fill="#0a0a0a">notes/</text>
+  <text x="812" y="108" font-size="11"><tspan fill="#707070">the estate: one repo, named in estates.toml</tspan></text>
+  <text x="812" y="130" font-size="11"><tspan fill="#707070">one directory per campaign</tspan></text>
+  <text x="812" y="152" font-size="11"><tspan font-family="Menlo, monospace" fill="#4a6741">home/garden</tspan><tspan dx="12" fill="#707070">the address and workspace label</tspan></text>
+  <text x="812" y="174" font-size="11"><tspan fill="#707070">the brief, extra paths and agent flags</tspan></text>
+  <text x="812" y="196" font-size="11"><tspan fill="#707070">the memory: dated entries, the last is the pointer</tspan></text>
+  <text x="812" y="218" font-size="11"><tspan fill="#707070">one line per conversation; resume reads the last</tspan></text>
+  <text x="812" y="240" font-size="11"><tspan fill="#707070">everything else the work needs</tspan></text>
+  <line x1="578" y1="258" x2="1102" y2="258" stroke="#e0e0e0" stroke-width="1"/>
+  <text x="584" y="276" font-size="9" font-weight="700" font-family="Menlo, monospace" fill="#707070" letter-spacing="1.2">HOME/GARDEN OVER WEEKS</text>
+  <text x="1096" y="276" text-anchor="end" font-size="9" font-weight="700" font-family="Menlo, monospace" fill="#707070" letter-spacing="1.2">TIME →</text>
+  <text x="584" y="300" font-size="11" font-family="Menlo, monospace" fill="#404040">conversations</text>
+  <text x="584" y="326" font-size="11" font-family="Menlo, monospace" fill="#404040">log.md</text>
+  <g>
+    <rect x="700" y="291" width="52" height="12" rx="2" fill="#707070"/>
+    <rect x="764" y="291" width="76" height="12" rx="2" fill="#707070"/>
+    <rect x="852" y="291" width="32" height="12" rx="2" fill="#707070"/>
+    <rect x="896" y="291" width="78" height="12" rx="2" fill="#707070"/>
+    <rect x="986" y="291" width="44" height="12" rx="2" fill="#707070"/>
+    <rect x="1042" y="291" width="54" height="12" rx="2" fill="#4a6741"/>
+  </g>
+  <line x1="700" y1="322" x2="1096" y2="322" stroke="#4a6741" stroke-width="3" stroke-linecap="round"/>
+  <g fill="#ffffff" stroke="#4a6741" stroke-width="1.5">
+    <circle cx="752" cy="322" r="3.5"/>
+    <circle cx="840" cy="322" r="3.5"/>
+    <circle cx="884" cy="322" r="3.5"/>
+    <circle cx="974" cy="322" r="3.5"/>
+    <circle cx="1030" cy="322" r="3.5"/>
+  </g>
+  <text x="700" y="344" font-size="10" fill="#707070">each gap is a fresh start; resume picks up the last conversation</text>
   <line x1="60" y1="386" x2="1140" y2="386" stroke="#e0e0e0" stroke-width="1"/>
   <text x="60" y="412" font-size="10" font-weight="600" font-family="Menlo, monospace" fill="#707070" letter-spacing="1.4">HERDR · TUI · RUST · WORKSPACES</text>
   <text x="1140" y="412" text-anchor="end" font-size="10" font-weight="600" font-family="Menlo, monospace" fill="#707070" letter-spacing="1.4">GITLAB.COM/DUNN.DEV/HERDR-ESTATE</text>
