@@ -6,7 +6,7 @@ description = "Durable campaigns for herdr: resume a campaign's latest conversat
 platforms = ["macos", "linux"]
 
 [[build]]
-command = ["cargo", "build", "--release"]
+command = ["cargo", "build", "--release", "--locked"]
 
 [[actions]]
 id = "resume"

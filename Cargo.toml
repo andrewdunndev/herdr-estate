@@ -4,14 +4,9 @@ version = "0.1.0"
 edition = "2021"
 description = "Durable campaigns for herdr: resume a campaign's latest conversation or start fresh, addressed by estate/campaign."
 license = "MIT"
-
-[lib]
-name = "herdr_estate"
-path = "src/lib.rs"
-
-[[bin]]
-name = "herdr-estate"
-path = "src/main.rs"
+repository = "https://gitlab.com/dunn.dev/herdr-estate"
+rust-version = "1.88"
+publish = false
 
 [dependencies]
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
