@@ -31,7 +31,7 @@ pub fn scrub_env(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Raised internally by `call_herdr(check: true)` on a non-zero herdr
+/// Returned internally by `call_herdr(check: true)` on a non-zero herdr
 /// exit. A separate type from `EstateError` that converts into
 /// `EstateError::Protocol` at the point `call_herdr` returns it, so every
 /// caller downstream of the herdr boundary still deals with the one
@@ -96,7 +96,7 @@ impl From<HerdrError> for EstateError {
 
 /// `agent_status` off a `workspace list`/`workspace get` row. Fails
 /// closed: `is_alive` below treats everything except exactly `Unknown`
-/// as alive, including a value this port has never seen.
+/// as alive, including any value not accounted for here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentStatus {
     Working,
@@ -139,10 +139,10 @@ impl AgentStatus {
 /// One row of `workspace list`'s `workspaces` array. `workspace_id` and
 /// `label` are exactly the fields the ownership and alive guards depend
 /// on, so neither carries `#[serde(default)]`: a row herdr sent without
-/// one fails the whole listing (`ProtocolError`) rather than silently
-/// dropping out of the guard's view the way a `.get()` default would.
-/// `agent_status` is the one field this port was explicitly told counts
-/// as alive when absent, so its `Option` carries the default instead —
+/// one fails the whole listing (`EstateError::Protocol`) rather than
+/// silently dropping out of the guard's view the way a `.get()` default
+/// would. `agent_status` is the one field known to count as alive when
+/// absent, so its `Option` carries the default instead —
 /// `Option`'s own `Deserialize` treats a missing key and an explicit
 /// `null` the same way, matching both cases in one rule.
 #[derive(Debug, Clone, Deserialize)]
@@ -160,8 +160,8 @@ pub struct WorkspaceListResult {
 
 /// `workspace get`'s envelope: tolerant, because a workspace herdr
 /// itself carries may have no label at all — an ordinary condition
-/// callers translate into their own error (`UsageError`, a skipped
-/// close), never a `ProtocolError` on its own.
+/// callers translate into their own error (`EstateError::Usage`, a
+/// skipped close), never `EstateError::Protocol` on its own.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct WorkspaceGetResult {
     #[serde(default)]
@@ -179,8 +179,8 @@ pub struct WorkspaceRef {
 /// `workspace create`'s envelope. Both ids ARE guard-critical here —
 /// every later call in the verb addresses this exact workspace and pane
 /// — so the caller (`verbs::created_ids`) turns a missing one into its
-/// own `ProtocolError`, naming the field, rather than this type failing
-/// to parse at all.
+/// own `EstateError::Protocol`, naming the field, rather than this type
+/// failing to parse at all.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct WorkspaceCreateResult {
     #[serde(default)]
@@ -270,10 +270,10 @@ pub fn call_herdr(args: &[String], check: bool) -> Result<HerdrResult, EstateErr
 
 /// Every workspace herdr currently has open, via `workspace list`. A
 /// non-zero exit (`call_herdr`'s `check: true`) or a response that
-/// doesn't parse into a `workspaces` array both raise `ProtocolError` —
-/// callers (the ownership/alive guards, the picker's row list) must
-/// never treat that as "no workspaces" and carry on over a half-true
-/// read.
+/// doesn't parse into a `workspaces` array both return
+/// `EstateError::Protocol` — callers (the ownership/alive guards, the
+/// picker's row list) must never treat that as "no workspaces" and
+/// carry on over a half-true read.
 pub fn workspace_list() -> Result<Vec<Workspace>, EstateError> {
     let result = call_herdr(&["workspace".to_string(), "list".to_string()], true)?;
     let list: WorkspaceListResult = serde_json::from_value(result.data).map_err(|_| {

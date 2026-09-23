@@ -227,8 +227,8 @@ fn print_plan(create_cmd: &[String], agent_cmd: &[String], close_cmd: Option<&[S
 }
 
 /// Validate `workspace create`'s response before using it: a missing
-/// workspace or pane id is a `ProtocolError` naming the field, never a
-/// raw panic two calls later.
+/// workspace or pane id is `EstateError::Protocol` naming the field,
+/// never a raw panic two calls later.
 fn created_ids(created: &HerdrResult) -> Result<(String, String), EstateError> {
     let parsed: WorkspaceCreateResult =
         serde_json::from_value(created.data.clone()).unwrap_or_default();
@@ -1215,7 +1215,7 @@ mod tests {
         std::fs::create_dir_all(&sessions).unwrap();
         std::fs::write(
             sessions.join(format!("{}.json", std::process::id())),
-            serde_json::json!({"sessionId": "old-sid", "name": "andrew"}).to_string(),
+            serde_json::json!({"sessionId": "old-sid", "name": "garden"}).to_string(),
         )
         .unwrap();
         let err = resume(&f.estates, "home/garden", false).unwrap_err();
@@ -1362,7 +1362,7 @@ mod tests {
         std::fs::create_dir_all(&sessions).unwrap();
         std::fs::write(
             sessions.join(format!("{}.json", std::process::id())),
-            serde_json::json!({"sessionId": "old-sid", "name": "andrew"}).to_string(),
+            serde_json::json!({"sessionId": "old-sid", "name": "garden"}).to_string(),
         )
         .unwrap();
         let err = fresh(&f.estates, "home/garden", false).unwrap_err();

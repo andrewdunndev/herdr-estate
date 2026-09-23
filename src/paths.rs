@@ -3,8 +3,7 @@
 use std::env;
 use std::path::PathBuf;
 
-/// A non-empty environment variable, or `None` — matches Python's `if d:`
-/// truthiness check on `os.environ.get(...)`, where an empty string is
+/// A non-empty environment variable, or `None` — an empty string is
 /// treated the same as unset. `pub(crate)`: `herdrcli` and `verbs` both
 /// read env vars with this same truthiness rule.
 pub(crate) fn non_empty_env(key: &str) -> Option<String> {
@@ -14,11 +13,11 @@ pub(crate) fn non_empty_env(key: &str) -> Option<String> {
     }
 }
 
-/// The invoking user's home directory, read from `$HOME` the way Python's
-/// `Path.home()` does on POSIX. There is no stdlib fallback to a passwd
-/// database lookup here (that would need an extra dependency); an unset
-/// `$HOME` yields an empty path, so a leading `~` is left as `~` by
-/// `expand` below rather than resolving to nothing useful.
+/// The invoking user's home directory, read from `$HOME`. There is no
+/// fallback to a passwd database lookup here (that would need an extra
+/// dependency); an unset `$HOME` yields an empty path, so a leading `~`
+/// is left as `~` by `expand` below rather than resolving to nothing
+/// useful.
 pub(crate) fn home_dir() -> PathBuf {
     match non_empty_env("HOME") {
         Some(h) => PathBuf::from(h),
@@ -26,8 +25,8 @@ pub(crate) fn home_dir() -> PathBuf {
     }
 }
 
-/// `$VAR` and `${VAR}` expansion, matching Python's `os.path.expandvars`:
-/// an unset or malformed reference is left in the string unexpanded.
+/// `$VAR` and `${VAR}` expansion: an unset or malformed reference is
+/// left in the string unexpanded.
 fn expand_vars(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len());
@@ -71,9 +70,9 @@ fn is_word_byte(b: u8) -> bool {
 }
 
 /// A leading `~` or `~/rest` expanded against `$HOME`. `~otheruser` (a
-/// different user's home, via a passwd lookup in Python) is left
-/// unexpanded — not reachable from any estate or campaign file in this
-/// project, and not worth an extra dependency.
+/// different user's home, via a passwd lookup) is left unexpanded — not
+/// reachable from any estate or campaign file in this project, and not
+/// worth an extra dependency.
 fn expand_user(p: &str) -> PathBuf {
     if p == "~" {
         return home_dir();

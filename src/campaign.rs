@@ -97,8 +97,8 @@ fn toml_to_scalar(v: &toml::Value) -> Scalar {
 /// carries: a number or boolean prints the same as TOML wrote it, so it
 /// is never dropped the way a `.as_str()`-only filter would drop it.
 /// `None` for an array or table — there is no sane single-value rendering
-/// for those, so the caller turns that into a named `ConfigError` instead
-/// of a silent drop.
+/// for those, so the caller turns that into a named
+/// `EstateError::Config` instead of a silent drop.
 fn toml_env_value(v: &toml::Value) -> Option<String> {
     match v {
         toml::Value::String(s) => Some(s.clone()),

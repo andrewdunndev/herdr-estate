@@ -1728,8 +1728,8 @@ mod tests {
         for wire in ["", "Working", "asleep"] {
             assert_eq!(Status::from_wire(wire), Status::Unknown, "{wire:?}");
         }
-        // A live row whose status this port doesn't know reads as
-        // unknown, glyph and word alike.
+        // A live row whose status is not recognized reads as unknown,
+        // glyph and word alike.
         let state = AppState::new(vec![live("home/garden", "asleep")]);
         let v = view(&state, 40, 3, Indicators::Symbols);
         assert_eq!(

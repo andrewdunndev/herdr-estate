@@ -1,10 +1,8 @@
 //! sessions.log: the continuity record a campaign's resume reads.
 //!
 //! One line per conversation: an ISO-8601 UTC timestamp, the hostname
-//! that opened it, and the conversation id, space-separated. This format
-//! is not invented here — it is byte-compatible with an existing estate
-//! tool's own sessions.log writer, so a campaign directory that already
-//! has one keeps resuming its latest conversation unmodified.
+//! that opened it, and the conversation id, space-separated. Keep this
+//! format stable: existing campaign directories depend on it.
 //! herdr-estate owns continuity itself; herdr's own resume is never used.
 
 use std::io::Write;

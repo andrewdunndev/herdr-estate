@@ -13,16 +13,17 @@
 //! returns `{"result": {"workspaces": [{"workspace_id", "label",
 //! "agent_status", ...}]}}`; a non-zero exit (`call_herdr`'s default
 //! `check: true`) or a 0 exit whose JSON didn't shape into a
-//! `workspaces` array both raise `ProtocolError` — an error that stops
-//! the verb, never a silent "no workspace, carry on". Every call also
-//! prunes `ownership`'s record to the workspace ids this listing still
-//! reports, since this is the one place the full listing is already in
-//! hand. Every row carrying the address is collected, not just the
-//! first: herdr's ids are reused across a server restart, so a second
-//! workspace under the same label is a real possibility, and picking one
-//! row over the other would hide it from both the alive guard and the
-//! ownership guard. More than one match raises `GuardError` naming every
-//! id found, before either guard runs on any of them.
+//! `workspaces` array both return `EstateError::Protocol` — an error
+//! that stops the verb, never a silent "no workspace, carry on". Every
+//! call also prunes `ownership`'s record to the workspace ids this
+//! listing still reports, since this is the one place the full listing
+//! is already in hand. Every row carrying the address is collected, not
+//! just the first: herdr's ids are reused across a server restart, so a
+//! second workspace under the same label is a real possibility, and
+//! picking one row over the other would hide it from both the alive
+//! guard and the ownership guard. More than one match returns
+//! `EstateError::Guard` naming every id found, before either guard runs
+//! on any of them.
 //!
 //! `workspace_alive` reads `agent_status` off the row `live_workspace`
 //! already fetched — no separate `agent list` call. "working", "idle"
@@ -159,7 +160,7 @@ mod tests {
     fn live_pid_is_a_holder() {
         let home = TempDir::new();
         let sessions = home.path().join(".claude").join("sessions");
-        write_session(&sessions, std::process::id(), "sid-1", "andrew");
+        write_session(&sessions, std::process::id(), "sid-1", "garden");
         let _g = EnvGuard::set(&[("HOME", home.path().to_str().unwrap())]);
         let holder = registry_holder("sid-1");
         assert!(holder.is_some());
@@ -181,7 +182,7 @@ mod tests {
         let home = TempDir::new();
         let sessions = home.path().join(".claude").join("sessions");
         // A pid this unlikely to be a live process on the test machine.
-        write_session(&sessions, 999_999, "sid-1", "andrew");
+        write_session(&sessions, 999_999, "sid-1", "garden");
         let _g = EnvGuard::set(&[("HOME", home.path().to_str().unwrap())]);
         assert!(registry_holder("sid-1").is_none());
     }
@@ -190,7 +191,7 @@ mod tests {
     fn no_match_is_none() {
         let home = TempDir::new();
         let sessions = home.path().join(".claude").join("sessions");
-        write_session(&sessions, std::process::id(), "sid-other", "andrew");
+        write_session(&sessions, std::process::id(), "sid-other", "garden");
         let _g = EnvGuard::set(&[("HOME", home.path().to_str().unwrap())]);
         assert!(registry_holder("sid-1").is_none());
     }

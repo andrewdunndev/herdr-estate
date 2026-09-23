@@ -44,8 +44,7 @@ pub struct ParseError {
 /// `fresh`, `list`, `create` or `pick`), an optional positional
 /// `address` and `--dry-run` on resume and fresh, create's required
 /// address, `--brief` and `--dry-run`, and pick's render flags. Anything
-/// else is a usage error, exit code 2 (the exit code argparse uses on a
-/// parse failure).
+/// else is a usage error, exit code 2.
 pub fn parse_args(argv: &[String]) -> Result<Command, ParseError> {
     let verb = argv.first().ok_or_else(|| ParseError {
         message: "the following arguments are required: verb".to_string(),
@@ -91,9 +90,9 @@ pub fn parse_args(argv: &[String]) -> Result<Command, ParseError> {
 }
 
 /// `create <address> --brief <text> [--dry-run]`: the address and the
-/// brief are both required, and the address is never derived. As in
-/// argparse, `--brief` never takes a flag as its text, so a forgotten
-/// brief before `--dry-run` is a usage error, not a real write.
+/// brief are both required, and the address is never derived.
+/// `--brief` never takes a flag as its text, so a forgotten brief
+/// before `--dry-run` is a usage error, not a real write.
 fn parse_create(rest: &[String]) -> Result<Command, ParseError> {
     let mut address = None;
     let mut brief = None;

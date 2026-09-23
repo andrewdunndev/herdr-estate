@@ -1,12 +1,12 @@
-//! The error type this package raises on purpose, as opposed to a herdr
+//! The error type this package returns on purpose, as opposed to a herdr
 //! failure at the herdr CLI boundary (a separate error kind defined where
 //! that boundary is crossed).
 
 use std::fmt;
 
-/// Every error this package raises deliberately, one hand-written enum
-/// carrying only a message: callers match on the variant to decide how to
-/// react, and print the message as-is.
+/// Every error this package returns deliberately, one hand-written enum
+/// carrying only a message: the variant names the class of refusal; the
+/// message is printed as-is.
 #[derive(Debug)]
 pub enum EstateError {
     /// The estate table, or an estate/campaign it names, can't be read.
