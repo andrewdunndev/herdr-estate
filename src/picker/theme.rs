@@ -1,5 +1,5 @@
 // Portions adapted from herdr v0.9.1 (github.com/herdrdev/herdr, tag
-// 8544776, Apache-2.0, https://www.apache.org/licenses/LICENSE-2.0;
+// 8544776, Apache-2.0, see /LICENSE-APACHE-HERDR;
 // Catppuccin palettes MIT): palettes from src/app/state.rs:78-525;
 // canonical() and parse_color() from src/config/theme.rs:25-47,155-219
 // (changed: .get() slicing); resolution from src/app/mod.rs:219-332.
