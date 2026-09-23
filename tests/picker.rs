@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use herdr_estate::picker::core::{self, AppState, Row, RowState};
+use herdr_estate::picker::core::{self, AppState, Indicators, Row, RowState};
 
 fn unique_dir(tag: &str) -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -186,7 +186,9 @@ fn render_once_matches_the_pure_core_for_the_same_rows() {
     // The golden frame, computed from the same pure core the binary
     // itself calls, over the rows this fixture seeded on disk — an
     // independent hand-transcription of the padding/truncation math
-    // would be one more place for an off-by-one to hide.
+    // would be one more place for an off-by-one to hide. `env_clear`
+    // and the fixture's own HOME mean there is no herdr config, so the
+    // binary draws herdr's default glyphs, dots.
     let expected_rows = vec![
         Row {
             address: "home/garden".to_string(),
@@ -206,12 +208,51 @@ fn render_once_matches_the_pure_core_for_the_same_rows() {
             state: RowState::New,
         },
     ];
-    let expected_lines = core::view(&AppState::new(expected_rows), 40, 8);
+    let expected_lines: Vec<String> =
+        core::view(&AppState::new(expected_rows), 40, 8, Indicators::Dots)
+            .lines
+            .iter()
+            .map(core::ViewLine::plain)
+            .collect();
     let expected = expected_lines.join("\n") + "\n";
 
     assert_eq!(stdout(&out), expected);
     assert!(expected.lines().count() <= 8);
     assert!(expected.lines().all(|l| l.chars().count() <= 40));
+    // The live row carries its dot: the glyphs came through.
+    assert!(expected.contains("> ● home/garden"), "{expected}");
+}
+
+#[test]
+fn render_once_draws_the_status_glyphs_herdrs_config_names() {
+    // The operator's setting, in the file herdr itself reads: with no
+    // HERDR_CONFIG_PATH or XDG_CONFIG_HOME (`env_clear`), that is
+    // $HOME/.config/herdr/config.toml. The same live row that draws a
+    // dot with no config draws herdr's symbol for working here.
+    let (f, root) = fixture();
+    make_campaign(&root, "garden", "---\n---\n");
+    let herdr_config = f.home.join(".config").join("herdr");
+    std::fs::create_dir_all(&herdr_config).unwrap();
+    std::fs::write(
+        herdr_config.join("config.toml"),
+        "[ui]\nstatus_indicators = \"symbols\"\n",
+    )
+    .unwrap();
+    f.fake.set_response(
+        0,
+        r#"{"result": {"workspaces": [
+            {"workspace_id": "w9", "label": "home/garden", "agent_status": "working"}
+        ]}}"#,
+        0,
+    );
+    let out = run(
+        &f,
+        &["pick", "--render-once", "--width", "40", "--height", "8"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("> ◐ home/garden"), "{text}");
+    assert!(!text.contains('●'), "{text}");
 }
 
 #[test]
@@ -222,8 +263,8 @@ fn render_once_with_no_campaigns_shows_the_filter_line_and_no_match() {
     let out = run(&f, &["pick", "--render-once"]);
     assert!(out.status.success(), "{}", stderr(&out));
     let text = stdout(&out);
-    assert!(text.starts_with("> "));
-    assert!(text.contains("no match"));
+    assert!(text.contains("/ filter campaigns"), "{text}");
+    assert!(text.contains(" no campaigns"), "{text}");
 }
 
 #[test]

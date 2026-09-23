@@ -142,7 +142,7 @@ Both verbs print each step to stderr, and every run appends to
 knows, one row per address, in a small terminal UI:
 
 - **live**: a workspace currently carries the address; its agent status
-  (working, idle, done or unknown) shows next to it.
+  (working, blocked, idle, done, unknown) shows next to it.
 - **dormant**: no live workspace, but `sessions.log` records a
   conversation; the date of its last line shows next to it.
 - **new**: neither.
@@ -154,8 +154,9 @@ selected row: live focuses the existing workspace, dormant resumes the
 campaign and then focuses the workspace it opens, new does the same
 through `fresh`. On Enter the row's workspace is read again at dispatch
 time and routed through the same verb functions and guards, never
-trusted from the drawn list. When the filter matches nothing, the
-picker shows "no match" and Enter does nothing.
+trusted from the drawn list. When nothing matches, the picker shows
+"no matching campaigns" and Enter does nothing. Status glyphs follow
+herdr's config; non-default themes get terminal colours.
 
 It opens as a popup over the active pane, from the key bound above or
 by hand:
@@ -168,7 +169,7 @@ herdr runs an action with no terminal, so the `pick` action makes that
 same call rather than drawing.
 
 `herdr-estate pick --render-once --width <W> --height <H>` prints a
-single frame as plain text, with no terminal needed (defaults to 80x20).
+single frame as plain text, no terminal needed (defaults to 80x20).
 
 ## Worked example
 

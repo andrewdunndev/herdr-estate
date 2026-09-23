@@ -34,7 +34,7 @@ command = ["target/release/herdr-estate", "pick"]
 
 [[panes]]
 id = "picker"
-title = "Campaigns"
+title = "campaigns"
 placement = "popup"
 width = "90%"
 height = "90%"

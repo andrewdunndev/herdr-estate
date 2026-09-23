@@ -9,13 +9,19 @@ use std::io::Write;
 use std::time::Duration;
 
 use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
 
 use crate::dispatch;
 use crate::errors::EstateError;
 use crate::herdrcli;
 use crate::paths::non_empty_env;
-use crate::picker::core::{self, AppState, Event as CoreEvent, Outcome};
+use crate::picker::core::{
+    self, AppState, Event as CoreEvent, Indicators, Outcome, Tone, ViewLine,
+};
 use crate::picker::rows;
+use crate::picker::theme::{self, Palette};
 use crate::progress;
 
 /// Restores the terminal on drop — normal return, an early `?`, or a
@@ -98,9 +104,12 @@ pub fn run(
     let built_rows = rows::build_rows(estates)?;
 
     if render_once {
+        // Plain text has no colours, but it shows the same glyphs the
+        // popup would.
+        let (_, ind) = theme::load();
         let state = AppState::new(built_rows);
-        for line in core::view(&state, width, height) {
-            println!("{line}");
+        for line in core::view(&state, width, height, ind).lines {
+            println!("{}", line.plain());
         }
         return Ok(0);
     }
@@ -195,11 +204,20 @@ fn run_interactive(built_rows: Vec<core::Row>) -> Result<Outcome, EstateError> {
         }
     };
     let _guard = RestoreGuard::new();
-    event_loop(
-        &mut terminal,
-        AppState::new(built_rows),
-        &mut CrosstermEvents,
-    )
+    pick_in(&mut terminal, built_rows, &mut CrosstermEvents)
+}
+
+/// The picker on a terminal that is already set up: herdr's look, read
+/// once as the popup opens (a theme changed while it is open shows the
+/// next time it opens), then the event loop. Split out of
+/// `run_interactive`, which needs a real terminal, so a test can run it
+/// on a `TestBackend` and see the look come from herdr's config.
+fn pick_in<B: ratatui::backend::Backend>(
+    terminal: &mut ratatui::Terminal<B>,
+    built_rows: Vec<core::Row>,
+    events: &mut impl EventSource,
+) -> Result<Outcome, EstateError> {
+    event_loop(terminal, AppState::new(built_rows), events, theme::load())
 }
 
 /// Where `event_loop` gets its input from — real crossterm in
@@ -225,23 +243,82 @@ impl EventSource for CrosstermEvents {
     }
 }
 
+/// The style a segment's tone is painted in: herdr's token for it, on
+/// `panel_bg`. `Fill` is blank panel, so its foreground never shows.
+fn tone_style(tone: Tone, p: &Palette) -> Style {
+    let fg = match tone {
+        Tone::Fill | Tone::Text => p.text,
+        Tone::Subtext => p.subtext0,
+        Tone::Muted => p.overlay0,
+        Tone::Rule => p.surface1,
+        Tone::Status(status) => p.status(status),
+    };
+    Style::new().fg(fg).bg(p.panel_bg)
+}
+
+/// The selection bar, herdr's selected-row style (overlays.rs:817-821):
+/// contrast text on accent, bold. The glyph and meta take it too.
+fn bar_style(p: &Palette) -> Style {
+    Style::new()
+        .fg(p.contrast)
+        .bg(p.accent)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// One `ViewLine` as a styled ratatui line. On the selected line every
+/// segment but the gutter takes the bar, so the bar spans columns
+/// 1..=W−1 and the gutter stays panel.
+fn styled_line(line: &ViewLine, p: &Palette) -> Line<'static> {
+    let spans: Vec<Span<'static>> = line
+        .segs
+        .iter()
+        .enumerate()
+        .map(|(i, seg)| {
+            let style = if line.selected && i > 0 {
+                bar_style(p)
+            } else {
+                tone_style(seg.tone, p)
+            };
+            Span::styled(seg.text.clone(), style)
+        })
+        .collect();
+    Line::from(spans)
+}
+
+/// Draw and read keys until `core::update` sets an outcome. The palette
+/// and indicator style are passed in rather than loaded here, so a test
+/// paints with a known palette and never reads the operator's herdr
+/// config.
 fn event_loop<B: ratatui::backend::Backend>(
     terminal: &mut ratatui::Terminal<B>,
     mut state: AppState,
     events: &mut impl EventSource,
+    (palette, ind): (Palette, Indicators),
 ) -> Result<Outcome, EstateError> {
     loop {
         terminal
             .draw(|frame| {
                 let area = frame.area();
-                let lines = core::view(&state, area.width as usize, area.height as usize);
-                let text = ratatui::text::Text::from(
-                    lines
-                        .into_iter()
-                        .map(ratatui::text::Line::from)
-                        .collect::<Vec<_>>(),
-                );
-                frame.render_widget(ratatui::widgets::Paragraph::new(text), area);
+                // Every cell is panel_bg first, as herdr's `panel()`
+                // fills its modals (overlays.rs:228-233), so the picker
+                // and herdr's frame around it read as one surface.
+                frame
+                    .buffer_mut()
+                    .set_style(area, Style::new().bg(palette.panel_bg).fg(palette.text));
+                let view = core::view(&state, area.width as usize, area.height as usize, ind);
+                let lines: Vec<Line> = view
+                    .lines
+                    .iter()
+                    .map(|line| styled_line(line, &palette))
+                    .collect();
+                frame.render_widget(Paragraph::new(lines), area);
+                // The picker is fullscreen, so the frame's area starts at
+                // the origin and the view's cursor is already in terminal
+                // coordinates. herdr forwards a popup's cursor to the
+                // real terminal (client/shell.rs:270-277).
+                if let Some(cursor) = view.cursor {
+                    frame.set_cursor_position(cursor);
+                }
             })
             .map_err(|e| EstateError::Protocol(format!("could not draw the picker: {e}")))?;
 
@@ -367,6 +444,11 @@ mod event_loop_tests {
         ratatui::Terminal::new(TestBackend::new(40, 10)).unwrap()
     }
 
+    /// herdr's default look, injected so no test reads a real config.
+    fn catppuccin() -> (Palette, Indicators) {
+        (Palette::catppuccin(), Indicators::Dots)
+    }
+
     #[test]
     fn a_quiet_poll_continues_the_loop_instead_of_reading() {
         // If the `!has_event` guard were deleted, this would call
@@ -377,7 +459,13 @@ mod event_loop_tests {
             Scripted::NoEvent,
             Scripted::Event(key_press(KeyCode::Esc)),
         ]);
-        let outcome = event_loop(&mut terminal, AppState::new(one_row()), &mut events).unwrap();
+        let outcome = event_loop(
+            &mut terminal,
+            AppState::new(one_row()),
+            &mut events,
+            catppuccin(),
+        )
+        .unwrap();
         assert_eq!(outcome, Outcome::Cancelled);
     }
 
@@ -394,7 +482,13 @@ mod event_loop_tests {
             Scripted::Event(TermEvent::Resize(80, 24)),
             Scripted::Event(key_press(KeyCode::Esc)),
         ]);
-        let outcome = event_loop(&mut terminal, AppState::new(one_row()), &mut events).unwrap();
+        let outcome = event_loop(
+            &mut terminal,
+            AppState::new(one_row()),
+            &mut events,
+            catppuccin(),
+        )
+        .unwrap();
         assert_eq!(outcome, Outcome::Cancelled);
     }
 
@@ -402,7 +496,13 @@ mod event_loop_tests {
     fn a_key_event_reaches_core_update_and_can_select_a_row() {
         let mut terminal = test_terminal();
         let mut events = ScriptedEvents::new(vec![Scripted::Event(key_press(KeyCode::Enter))]);
-        let outcome = event_loop(&mut terminal, AppState::new(one_row()), &mut events).unwrap();
+        let outcome = event_loop(
+            &mut terminal,
+            AppState::new(one_row()),
+            &mut events,
+            catppuccin(),
+        )
+        .unwrap();
         assert_eq!(
             outcome,
             Outcome::Selected(Row {
@@ -410,6 +510,184 @@ mod event_loop_tests {
                 state: RowState::New,
             })
         );
+    }
+
+    #[test]
+    fn the_frame_is_herdrs_panel_with_a_gutter_a_selection_bar_and_a_cursor() {
+        use ratatui::style::Color;
+        // 40x10, catppuccin, one New row: the frame drawn before the Esc
+        // is the one left in the backend.
+        let mut terminal = test_terminal();
+        let mut events = ScriptedEvents::new(vec![Scripted::Event(key_press(KeyCode::Esc))]);
+        let outcome = event_loop(
+            &mut terminal,
+            AppState::new(one_row()),
+            &mut events,
+            catppuccin(),
+        )
+        .unwrap();
+        assert_eq!(outcome, Outcome::Cancelled);
+
+        let panel = Color::Rgb(0x18, 0x18, 0x25);
+        let accent = Color::Rgb(0x89, 0xb4, 0xfa);
+        let buf = terminal.backend().buffer().clone();
+        // The gutter is panel on every row, and so is every cell off the
+        // selection bar: nothing shows the terminal's own background.
+        for y in 0..10u16 {
+            assert_eq!(buf[(0, y)].bg, panel, "gutter, row {y}");
+            for x in 0..40u16 {
+                if y != 2 || x == 0 {
+                    assert_eq!(buf[(x, y)].bg, panel, "({x},{y})");
+                }
+            }
+        }
+        // The one row is selected: the bar spans columns 1..=39, bold,
+        // in contrast text, and leaves the gutter out.
+        for x in 1..=39u16 {
+            let cell = &buf[(x, 2)];
+            assert_eq!(cell.bg, accent, "bar at ({x},2)");
+            assert_eq!(cell.fg, panel, "bar text at ({x},2)");
+            assert!(cell.modifier.contains(Modifier::BOLD), "bold at ({x},2)");
+        }
+        assert_ne!(buf[(0, 2)].bg, accent);
+        assert!(!buf[(0, 2)].modifier.contains(Modifier::BOLD));
+        // Text starts at x=2 behind a blank x=1: the filter line, the
+        // detail line and the footer. The address starts at x=4.
+        for y in [0u16, 8, 9] {
+            assert_eq!(buf[(1, y)].symbol(), " ", "row {y}");
+            assert_ne!(buf[(2, y)].symbol(), " ", "row {y}");
+        }
+        assert_eq!(buf[(2, 0)].symbol(), "/");
+        assert_eq!(buf[(4, 2)].symbol(), "h");
+        assert_eq!(buf[(1, 1)].symbol(), "─");
+        assert_eq!(buf[(1, 1)].fg, Color::Rgb(0x45, 0x47, 0x5a));
+        // The cursor sits on the placeholder's first cell.
+        terminal.backend_mut().assert_cursor_position((4, 0));
+    }
+
+    #[test]
+    fn each_tone_paints_its_herdr_token_on_panel() {
+        let p = Palette::catppuccin();
+        let on_panel = |fg| Style::new().fg(fg).bg(p.panel_bg);
+        assert_eq!(tone_style(Tone::Fill, &p), on_panel(p.text));
+        assert_eq!(tone_style(Tone::Text, &p), on_panel(p.text));
+        assert_eq!(tone_style(Tone::Subtext, &p), on_panel(p.subtext0));
+        assert_eq!(tone_style(Tone::Muted, &p), on_panel(p.overlay0));
+        assert_eq!(tone_style(Tone::Rule, &p), on_panel(p.surface1));
+        assert_eq!(
+            tone_style(Tone::Status(core::Status::Working), &p),
+            on_panel(p.yellow)
+        );
+        assert_eq!(
+            bar_style(&p),
+            Style::new()
+                .fg(p.contrast)
+                .bg(p.accent)
+                .add_modifier(Modifier::BOLD)
+        );
+    }
+
+    #[test]
+    fn the_popup_paints_in_the_look_herdrs_config_names() {
+        use ratatui::style::Color;
+        // The operator's symbols, and a theme the picker can't copy.
+        // `pick_in` is what `run_interactive` runs once the terminal is
+        // up, so this is the popup reading herdr's config for itself.
+        let d = crate::test_support::TempDir::new();
+        let cfg = d.path().join("config.toml");
+        std::fs::write(
+            &cfg,
+            "[theme]\nname = \"nord\"\n[ui]\nstatus_indicators = \"symbols\"\n",
+        )
+        .unwrap();
+        let _g =
+            crate::test_support::EnvGuard::set(&[("HERDR_CONFIG_PATH", cfg.to_str().unwrap())]);
+        let rows = vec![Row {
+            address: "home/garden".to_string(),
+            state: RowState::Live {
+                workspace_id: "w1".to_string(),
+                agent_status: "working".to_string(),
+            },
+        }];
+        let mut terminal = test_terminal();
+        let mut events = ScriptedEvents::new(vec![Scripted::Event(key_press(KeyCode::Esc))]);
+        assert_eq!(
+            pick_in(&mut terminal, rows, &mut events).unwrap(),
+            Outcome::Cancelled
+        );
+        let buf = terminal.backend().buffer();
+        // herdr's symbol for working, not its default dot...
+        assert_eq!(buf[(2, 2)].symbol(), "◐");
+        // ...on the terminal palette's accent bar, with its rule colour.
+        assert_eq!(buf[(2, 2)].bg, Color::Blue);
+        assert_eq!(buf[(1, 1)].fg, Color::DarkGray);
+    }
+
+    #[test]
+    fn every_cluster_is_painted_where_the_core_measured_it() {
+        use ratatui::buffer::CellWidth;
+        use ratatui::layout::Position;
+        // Addresses whose clusters take more or fewer cells than their
+        // chars do one by one: a joined emoji (2 cells, 4 by char), an
+        // emoji with its selector (2, 1 by char), a flag, a skin tone,
+        // an accent spelled as macOS spells file names, a halfwidth
+        // sound mark and CJK. ratatui measures each line afresh as it
+        // paints it, so where it puts the right-aligned text, the end of
+        // the bar and the end of the typed query shows whether the core
+        // counted the same cells. Each address is typed into the filter
+        // too, so the query goes through the same measure. The state is
+        // typed before the loop starts, so the backend holds a single
+        // frame: over several, ratatui skips a cell a wide char covers,
+        // and TestBackend (unlike a terminal) keeps what was there.
+        let p = Palette::catppuccin();
+        let addresses = [
+            "home/👩\u{200D}🔬lab",
+            "home/❤\u{FE0F}garden",
+            "home/🇬🇧uk",
+            "home/👍🏽ok",
+            "home/e\u{301}cole",
+            "home/ｶ\u{FF9E}me",
+            "home/日本",
+        ];
+        for address in addresses {
+            for width in 12u16..=40 {
+                let mut state = AppState::new(vec![Row {
+                    address: address.to_string(),
+                    state: RowState::New,
+                }]);
+                for c in address.chars() {
+                    state = core::update(state, CoreEvent::Char(c));
+                }
+                let mut terminal = ratatui::Terminal::new(TestBackend::new(width, 7)).unwrap();
+                let mut events =
+                    ScriptedEvents::new(vec![Scripted::Event(key_press(KeyCode::Esc))]);
+                event_loop(&mut terminal, state, &mut events, (p, Indicators::Dots)).unwrap();
+                let cursor = terminal.get_cursor_position().unwrap();
+                let buf = terminal.backend().buffer();
+                let at = |x: u16, y: u16| buf[(x, y)].symbol();
+                let run = |y: u16, from: u16, to: u16| -> String {
+                    (from..=to).map(|x| at(x, y)).collect()
+                };
+                let ctx = format!("{address:?} at width {width}");
+                // The selected row's bar reaches the last column, whose
+                // cell is blank...
+                assert_eq!(buf[(width - 1, 2)].bg, p.accent, "{ctx}");
+                assert_eq!(at(width - 1, 2), " ", "{ctx}");
+                // ...and right-aligned text ends one cell short of it.
+                if width >= 17 {
+                    assert_eq!(run(2, width - 4, width - 2), "new", "{ctx}");
+                    assert_eq!(run(0, width - 11, width - 2), "1 campaign", "{ctx}");
+                }
+                // The cursor sits right after the query as ratatui
+                // painted it, stepping over each wide cluster's second
+                // cell.
+                let mut x = 4;
+                while at(x, 0) != " " {
+                    x += at(x, 0).cell_width().max(1);
+                }
+                assert_eq!(cursor, Position::new(x, 0), "{ctx}");
+            }
+        }
     }
 
     // --- wait_for_press: the hold after a failed dispatch ---

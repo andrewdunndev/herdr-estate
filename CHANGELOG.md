@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- The picker takes herdr's own look, from its pane navigator: a filter
+  line with a count, a rule, rows with herdr's status glyphs, a detail
+  line saying what Enter will do, and key hints. Every cell is painted
+  herdr's panel colour and column 0 stays blank, so the popup's edge
+  reads as one surface and text no longer touches its left border.
+  Colours and glyphs follow herdr's config (`[theme]`,
+  `[ui].status_indicators`); a theme other than catppuccin falls back
+  to the terminal palette. The popup title is now `campaigns`.
 - The `pick` action opens the picker popup. herdr runs an action with
   no terminal, so a key bound to it failed with "could not start the
   terminal". The README binds it to `prefix+shift+e`, a key herdr
