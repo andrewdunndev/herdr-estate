@@ -3,7 +3,8 @@
 Six words, each defined once. herdr's own words (session, workspace,
 tab, pane, agent) are only ever used in herdr's sense.
 
-- **estate**: one repo that holds all your campaigns.
+- **estate**: one repo that holds a set of campaigns, named by one
+  `[estate.<name>]` table.
 - **campaign**: a durable thread of work with its own directory inside
   the estate: a campaign file, a log, notes.
 - **conversation**: one agent transcript. A campaign has many over its

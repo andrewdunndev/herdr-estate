@@ -3,7 +3,8 @@ root = "~/estates/home"        # the repo that holds the campaigns; the only req
 campaigns = "campaigns"        # directory under root
 agent = "claude"               # default herdr agent kind
 paths = ["~/code"]             # extra directories, added before each campaign's own
-prompts = ["prompts/base.md"]  # joined in order and appended to every agent
+prompts = ["prompts/base.md"]  # joined in order, appended to claude's system
+                                # prompt (other kinds get no mapped flags)
 env = { }                      # exported into every workspace
 
 # In root, paths and prompts, ~ and $VAR expand first; a relative

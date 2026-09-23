@@ -14,12 +14,12 @@ word is defined once in [docs/vocabulary.md](docs/vocabulary.md).
 ## Long-running work
 
 A campaign runs for weeks, and a conversation costs more per turn the
-longer it runs, so recycle often: the agent adds a dated entry to the
-campaign's `log.md` saying where to pick up, then `fresh` retires the
-conversation and starts a new one at the same address, with the same
-paths, flags and prompts. The new one reads the log, not the old
-transcript. The estate's `prompts` teach the agent to keep the log
-([example](examples/home/prompts/base.md)). `resume` continues a
+longer it runs, so recycle often: ask the agent for a dated entry in
+the campaign's `log.md` saying where to pick up; once it exits, `fresh`
+retires the conversation and starts a new one at the same address,
+with the same paths, flags and prompts. The new one reads the log, not
+the old transcript. The estate's `prompts` teach the agent to keep the
+log ([example](examples/home/prompts/base.md)). `resume` continues a
 conversation that isn't finished.
 
 ## Install
@@ -40,13 +40,17 @@ type = "plugin_action"
 command = "herdr-estate.pick"
 ```
 
-`resume` and `fresh` bind the same way. For shell use,
-`cargo install --locked --git https://github.com/andrewdunndev/herdr-estate`
+`resume` and `fresh` bind the same way. For shell use:
+
+```sh
+cargo install --locked --git https://github.com/andrewdunndev/herdr-estate
+```
+
 or a [release binary](https://gitlab.com/dunn.dev/herdr-estate/-/releases) puts `herdr-estate` on your PATH.
 
 ## Configure
 
-![An address names one estate table and one campaign directory, whose campaign.md overrides the estate's keys one at a time.](diagrams/two-files.svg)
+![An address names one estate table and one campaign directory, whose campaign.md sets the agent, its flags and extra paths.](diagrams/two-files.svg)
 
 The estate table lives at `~/.config/herdr-estate/estates.toml`; only
 `root` is required:
@@ -58,8 +62,8 @@ root = "~/estates/home"
 
 Each campaign is a directory under `campaigns/` holding a
 `campaign.md`, whose YAML frontmatter overrides the agent kind and its
-flags key by key, and adds `paths`. The agent works from the estate
-root, with the address in `HERDR_ESTATE_ADDRESS`.
+flags, and adds `paths`. The agent works from the estate root, with
+the address in `HERDR_ESTATE_ADDRESS`.
 [examples/](examples/) is an annotated estate.
 
 ## Worktrees
@@ -70,9 +74,10 @@ worktree:
   branch: wt/site-work
 ```
 
-`resume` and `fresh` create it if missing (branching from the remote
-default), run the agent in it and add it to its paths. List the estate
-root in `paths` so the agent can still reach `log.md`.
+`resume` and `fresh` create it if missing (a new branch starts from
+the remote default; an existing one is checked out as is), run the
+agent in it and add it to its paths. List the estate root in `paths`
+so the agent can still reach `log.md`.
 
 ## The verbs
 

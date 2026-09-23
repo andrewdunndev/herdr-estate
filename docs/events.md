@@ -48,7 +48,11 @@ action, or the picker pane), otherwise `$XDG_STATE_HOME/herdr-estate`
 or `~/.local/state/herdr-estate`. It also holds the ownership record
 (`owned.json`), each campaign's assembled prompt
 (`<estate>-<campaign>.prompt.md`) and the worktrees the verbs create
-(under `worktrees/`). The log is created readable by you only,
-and a failed herdr call's message masks every estate `env` value the way
-a `--dry-run` plan does, on stderr and in the log alike. The log only
-grows; delete it whenever.
+(under `worktrees/`). Because the ownership record lives here too, a
+workspace opened from a plain shell is recorded in the shell's state
+dir, and one opened through herdr in herdr's; each then reads the
+other's workspace as one it did not create, and refuses to close it.
+The log is created readable by you only, and a failed herdr call's
+message masks every estate `env` value the way a `--dry-run` plan
+does, on stderr and in the log alike. The log only grows; delete it
+whenever.
