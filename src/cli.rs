@@ -23,6 +23,11 @@ pub enum Command {
         dry_run: bool,
     },
     List,
+    Create {
+        address: String,
+        brief: String,
+        dry_run: bool,
+    },
     Pick {
         render_once: bool,
         width: usize,
@@ -36,10 +41,11 @@ pub struct ParseError {
 }
 
 /// A small hand-rolled parser: one required subcommand (`resume`,
-/// `fresh`, `list` or `pick`), an optional positional `address` and
-/// `--dry-run` on the two verbs, and `pick`'s render flags. Anything
-/// else is a usage error, exit code 2 (the exit code Python's argparse
-/// uses on a parse failure).
+/// `fresh`, `list`, `create` or `pick`), an optional positional
+/// `address` and `--dry-run` on resume and fresh, create's required
+/// address, `--brief` and `--dry-run`, and pick's render flags. Anything
+/// else is a usage error, exit code 2 (the exit code argparse uses on a
+/// parse failure).
 pub fn parse_args(argv: &[String]) -> Result<Command, ParseError> {
     let verb = argv.first().ok_or_else(|| ParseError {
         message: "the following arguments are required: verb".to_string(),
@@ -74,11 +80,50 @@ pub fn parse_args(argv: &[String]) -> Result<Command, ParseError> {
             }
             Ok(Command::List)
         }
+        "create" => parse_create(rest),
         "pick" => parse_pick(rest),
         other => Err(ParseError {
             message: format!(
-                "argument verb: invalid choice: {other:?} (choose from 'resume', 'fresh', 'list', 'pick')"
+                "argument verb: invalid choice: {other:?} (choose from 'resume', 'fresh', 'list', 'create', 'pick')"
             ),
+        }),
+    }
+}
+
+/// `create <address> --brief <text> [--dry-run]`: the address and the
+/// brief are both required, and the address is never derived. As in
+/// argparse, `--brief` never takes a flag as its text, so a forgotten
+/// brief before `--dry-run` is a usage error, not a real write.
+fn parse_create(rest: &[String]) -> Result<Command, ParseError> {
+    let mut address = None;
+    let mut brief = None;
+    let mut dry_run = false;
+    let mut args = rest.iter();
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--dry-run" => dry_run = true,
+            "--brief" => {
+                let text = args.next().filter(|b| !b.starts_with('-'));
+                brief = Some(text.cloned().ok_or_else(|| ParseError {
+                    message: "argument --brief: expected one argument".to_string(),
+                })?);
+            }
+            _ if a.starts_with('-') || address.is_some() => {
+                return Err(ParseError {
+                    message: format!("unrecognized arguments: {a}"),
+                })
+            }
+            _ => address = Some(a.clone()),
+        }
+    }
+    match (address, brief) {
+        (Some(address), Some(brief)) => Ok(Command::Create {
+            address,
+            brief,
+            dry_run,
+        }),
+        _ => Err(ParseError {
+            message: "the following arguments are required: address, --brief".to_string(),
         }),
     }
 }
@@ -163,6 +208,14 @@ fn dispatch(cmd: Command) -> Result<i32, EstateError> {
                 println!("{}", verbs::format_row(row));
             }
             Ok(0)
+        }
+        Command::Create {
+            address,
+            brief,
+            dry_run,
+        } => {
+            let estates = config::load_estates(None)?;
+            verbs::create_campaign(&estates, &address, &brief, dry_run).map(|()| 0)
         }
         Command::Pick {
             render_once,
@@ -274,6 +327,36 @@ mod tests {
         assert_eq!(parse_args(&args(&["list"])).unwrap(), Command::List);
         assert!(parse_args(&args(&["list", "--dry-run"])).is_err());
         assert!(parse_args(&args(&["list", "home/garden"])).is_err());
+    }
+
+    #[test]
+    fn parse_create_needs_an_address_and_a_brief() {
+        assert_eq!(
+            parse_args(&args(&[
+                "create",
+                "--brief",
+                "b",
+                "home/quern",
+                "--dry-run"
+            ]))
+            .unwrap(),
+            Command::Create {
+                address: "home/quern".to_string(),
+                brief: "b".to_string(),
+                dry_run: true
+            }
+        );
+        for bad in [
+            &["create", "home/quern"][..],
+            &["create", "--brief", "b"],
+            &["create", "home/quern", "--brief"],
+            // Never a real write whose brief is "--dry-run".
+            &["create", "home/quern", "--brief", "--dry-run"],
+            &["create", "home/a", "home/b", "--brief", "b"],
+            &["create", "home/quern", "--nope", "--brief", "b"],
+        ] {
+            assert!(parse_args(&args(bad)).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

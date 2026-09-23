@@ -1,4 +1,4 @@
-//! resume, fresh and list: the three actions, and the herdr command
+//! resume, fresh, list and create: the verbs, and the herdr command
 //! shapes behind them.
 //!
 //! Every workspace is created with `--label <address>`, `--no-focus`, and
@@ -21,12 +21,16 @@
 //! only skips the herdr calls that actually create, close or start
 //! something.
 
+use std::path::Path;
+
 use crate::adapters;
 use crate::campaign::{self, AgentKind, Campaign};
+use crate::config::parse_address;
 use crate::continuity;
 use crate::doubleopen;
 use crate::errors::EstateError;
 use crate::herdrcli::{self, HerdrResult, Workspace, WorkspaceCreateResult, WorkspaceGetResult};
+use crate::name::{self, agent_name};
 use crate::ownership;
 use crate::progress;
 use crate::prompt;
@@ -44,30 +48,6 @@ pub const PANE_PLACEHOLDER: &str = "<PANE_ID>";
 /// with, tmux markers for a pane the workspace did not create) rather
 /// than the workspace about to exist.
 pub const WORKSPACE_ENV_SCRUB: &[&str] = &["ANTHROPIC_API_KEY", "TMUX", "TMUX_PANE"];
-
-fn is_agent_name_byte(c: char) -> bool {
-    c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-'
-}
-
-pub fn agent_name(address: &str) -> String {
-    let sanitized: String = address
-        .to_lowercase()
-        .chars()
-        .map(|c| if is_agent_name_byte(c) { c } else { '-' })
-        .collect();
-    let trimmed = sanitized.trim_start_matches('-');
-    let base = if trimmed.is_empty() {
-        "estate".to_string()
-    } else {
-        trimmed.to_string()
-    };
-    let named = if base.chars().next().is_some_and(|c| c.is_alphabetic()) {
-        base
-    } else {
-        format!("a{base}")
-    };
-    named.chars().take(32).collect()
-}
 
 /// `redact: true` is for display only (`--dry-run`): every estate-table
 /// env value is masked to `KEY=<from estates.toml>` so a printed plan
@@ -571,28 +551,13 @@ pub struct CampaignRow {
 
 pub fn list_campaigns(estates: &toml::Table) -> Vec<CampaignRow> {
     let mut rows = Vec::new();
-    for (estate_name, value) in estates.iter() {
-        let row = match value.as_table() {
-            Some(t) => t,
-            None => continue,
-        };
-        let root_val = match row
-            .get("root")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-        {
-            Some(r) => r,
-            None => continue,
-        };
-        let root = crate::paths::expand(root_val);
-        let campaigns_sub = row
-            .get("campaigns")
-            .and_then(|v| v.as_str())
-            .unwrap_or(crate::config::DEFAULT_CAMPAIGNS_DIR);
-        let campaigns_dir = root.join(campaigns_sub);
-        if !campaigns_dir.is_dir() {
+    for estate_name in estates.keys() {
+        let Some(campaigns_dir) = campaign::campaigns_dir(estates, estate_name)
+            .ok()
+            .filter(|d| d.is_dir())
+        else {
             continue;
-        }
+        };
         let mut names: Vec<String> = match std::fs::read_dir(&campaigns_dir) {
             Ok(entries) => entries
                 .flatten()
@@ -631,6 +596,158 @@ pub fn format_row(row: &CampaignRow) -> String {
         format!("last {}", row.last)
     };
     format!("{:<26} {state}", row.address)
+}
+
+/// Fills a file `create` has just made at the path. A seam, so a test
+/// can fail either of its writes part-way, or write beside them.
+type Fill = fn(&Path, &mut std::fs::File, &str) -> std::io::Result<()>;
+
+/// Writes one new file, never over anything that exists (`create_new`),
+/// and removes it again if filling it fails.
+fn write_new(path: &Path, text: &str, fill: Fill) -> std::io::Result<()> {
+    let mut f = std::fs::File::create_new(path)?;
+    fill(path, &mut f, text).inspect_err(|_| {
+        let _ = std::fs::remove_file(path);
+    })
+}
+
+/// `herdr-estate create`: a new campaign directory holding `campaign.md`,
+/// the brief under its heading, and `log.md`, whose first entry hands
+/// both to the campaign's first agent to commit. Files only: no herdr
+/// call, no git. Refuses what `name::refusal` or `name::brief_refusal`
+/// refuses, a missing campaigns directory (never created here), and
+/// anything at all at the path, even an empty directory: a renamed
+/// campaign leaves its gitignored sessions.log behind, and adopting it
+/// would inherit its conversations. `--dry-run` runs every check and
+/// writes nothing.
+pub fn create_campaign(
+    estates: &toml::Table,
+    address: &str,
+    brief: &str,
+    dry_run: bool,
+) -> Result<(), EstateError> {
+    create_with(estates, address, brief, dry_run, |_, f, text| {
+        std::io::Write::write_all(f, text.as_bytes())
+    })
+}
+
+fn create_with(
+    estates: &toml::Table,
+    address: &str,
+    brief: &str,
+    dry_run: bool,
+    fill: Fill,
+) -> Result<(), EstateError> {
+    let (estate, name) = parse_address(address)?;
+    let campaigns = campaign::campaigns_dir(estates, &estate)?;
+    if !campaigns.is_dir() {
+        return Err(EstateError::Config(format!(
+            "{address}: no campaigns directory at {} — refusing to create one",
+            campaigns.display()
+        )));
+    }
+    let listed = list_campaigns(estates);
+    let known: Vec<&str> = listed.iter().map(|r| r.address.as_str()).collect();
+    let brief = brief.trim();
+    let refused = name::refusal(&estate, &name, &known)
+        .or_else(|| name::brief_refusal(brief).map(str::to_string));
+    if let Some(reason) = refused {
+        return Err(EstateError::Usage(format!("{address}: {reason}")));
+    }
+    let dir = campaigns.join(&name);
+    let adopt = || {
+        EstateError::Guard(format!(
+            "{} already exists — refusing to adopt it",
+            dir.display()
+        ))
+    };
+    let paths = [dir.join("campaign.md"), dir.join("log.md")];
+    if dry_run {
+        if std::fs::symlink_metadata(&dir).is_ok() {
+            return Err(adopt());
+        }
+        println!("would create:");
+        for path in &paths {
+            println!("  {}", path.display());
+        }
+        return Ok(());
+    }
+    // create_dir, never create_dir_all, is the check itself: it fails
+    // on anything at the path, a dangling symlink or an empty directory
+    // too.
+    std::fs::create_dir(&dir).map_err(|e| match e.kind() {
+        std::io::ErrorKind::AlreadyExists => adopt(),
+        _ => EstateError::Config(format!("could not create {}: {e}", dir.display())),
+    })?;
+    progress::step(&format!(
+        "{address}: creating campaign.md and log.md in {} (untracked)",
+        dir.display()
+    ));
+    let date = today(std::process::Command::new("date").arg("+%F"));
+    let texts = [
+        format!("---\n---\n\n# {name}\n\n## What this is\n\n{brief}\n"),
+        log_md(&name, address, brief, &date),
+    ];
+    for (i, (path, text)) in paths.iter().zip(&texts).enumerate() {
+        if let Err(e) = write_new(path, text, fill) {
+            // Only what this call made: write_new has taken back its own
+            // file, so the files before it, then the directory, which
+            // remove_dir takes only once empty.
+            for made in &paths[..i] {
+                let _ = std::fs::remove_file(made);
+            }
+            let _ = std::fs::remove_dir(&dir);
+            return Err(EstateError::Config(format!(
+                "could not write {}: {e}",
+                path.display()
+            )));
+        }
+    }
+    println!("created  {address}  {}", dir.display());
+    Ok(())
+}
+
+/// A new campaign's `log.md`, in the estates' log convention: dated `##`
+/// entries, the tail of the latest being the re-entry pointer.
+fn log_md(name: &str, address: &str, brief: &str, date: &str) -> String {
+    // A commit subject carries no trailing period, whatever the brief ends in.
+    let subject = brief.trim_end_matches('.');
+    format!(
+        "# {name} — log
+
+## {date} — campaign created
+
+Created with herdr-estate as `{address}`, with this brief:
+{brief}
+
+POINTER: CURRENT STATE — campaign.md holds only the brief; nothing else
+exists yet. herdr-estate wrote campaign.md and this log, and neither
+is committed.
+
+NEXT ACTION — agree the scope with the operator and write it into
+campaign.md, then commit campaign.md and log.md by name as
+`campaign({name}): create — {subject}`.
+
+HOLDS: none.
+"
+    )
+}
+
+/// The operator's local date, `YYYY-MM-DD`, from `date` (`date +%F`,
+/// run as `continuity` runs `hostname`); the UTC date if it fails or
+/// prints anything but a date.
+fn today(date: &mut std::process::Command) -> String {
+    date.output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|d| is_date(d))
+        .unwrap_or_else(|| continuity::now_utc_iso()[..10].to_string())
+}
+
+/// `YYYY-MM-DD` in shape.
+fn is_date(s: &str) -> bool {
+    s.split('-').map(str::len).eq([4, 2, 2]) && s.bytes().all(|b| b == b'-' || b.is_ascii_digit())
 }
 
 #[cfg(test)]
@@ -679,44 +796,7 @@ mod tests {
         );
     }
 
-    // --- agent_name ---
-
-    #[test]
-    fn agent_name_sanitizes_and_lowercases() {
-        assert_eq!(agent_name("Home/Garden"), "home-garden");
-    }
-
-    #[test]
-    fn agent_name_truncates_to_32() {
-        let name = agent_name(&format!("home/{}", "x".repeat(40)));
-        assert!(name.chars().count() <= 32);
-    }
-
-    #[test]
-    fn agent_name_leading_digit_gets_prefixed() {
-        assert!(agent_name("9lives/x")
-            .chars()
-            .next()
-            .unwrap()
-            .is_alphabetic());
-    }
-
-    // --- byte classifiers and shlex quoting ---
-
-    #[test]
-    fn is_agent_name_byte_accepts_underscore() {
-        assert!(is_agent_name_byte('_'));
-    }
-
-    #[test]
-    fn is_agent_name_byte_accepts_hyphen() {
-        assert!(is_agent_name_byte('-'));
-    }
-
-    #[test]
-    fn is_agent_name_byte_rejects_a_slash() {
-        assert!(!is_agent_name_byte('/'));
-    }
+    // --- shlex quoting ---
 
     #[test]
     fn shlex_quote_wraps_a_value_containing_a_space() {
@@ -1616,5 +1696,219 @@ mod tests {
             brief: String::new(),
         };
         assert!(format_row(&dormant).contains("last 2026-09-21"));
+    }
+
+    // --- create ---
+
+    /// The file names in `dir`, sorted.
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn create_writes_campaign_md_and_a_dated_log_md_and_nothing_else() {
+        let f = make_fixture("claude");
+        let dir = f.cdir.parent().unwrap().join("quern");
+        create_campaign(&f.estates, "home/quern", " Grind the grain. ", false).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("campaign.md")).unwrap(),
+            "---\n---\n\n# quern\n\n## What this is\n\nGrind the grain.\n"
+        );
+        // Whatever today is, the rest of the log is log_md's.
+        let log = std::fs::read_to_string(dir.join("log.md")).unwrap();
+        let date = &log["# quern — log\n\n## ".len()..][..10];
+        assert!(is_date(date), "{date:?}");
+        assert_eq!(log, log_md("quern", "home/quern", "Grind the grain.", date));
+        assert_eq!(names_in(&dir), ["campaign.md", "log.md"]);
+        let row = list_campaigns(&f.estates)
+            .into_iter()
+            .find(|r| r.address == "home/quern")
+            .unwrap();
+        assert_eq!(
+            (row.last.as_str(), row.brief.as_str()),
+            ("", "Grind the grain.")
+        );
+        assert_eq!(
+            progress::logged_messages(),
+            vec![format!(
+                "home/quern: creating campaign.md and log.md in {} (untracked)",
+                dir.display()
+            )]
+        );
+        assert_eq!(f.fake.call_count(), 0);
+    }
+
+    #[test]
+    fn log_md_follows_the_estates_log_convention_dated_as_given() {
+        assert_eq!(
+            log_md("quern", "home/quern", "Grind the grain.", "2026-09-22"),
+            "# quern — log\n\n## 2026-09-22 — campaign created\n\n\
+             Created with herdr-estate as `home/quern`, with this brief:\n\
+             Grind the grain.\n\n\
+             POINTER: CURRENT STATE — campaign.md holds only the brief; nothing else\n\
+             exists yet. herdr-estate wrote campaign.md and this log, and neither\n\
+             is committed.\n\n\
+             NEXT ACTION — agree the scope with the operator and write it into\n\
+             campaign.md, then commit campaign.md and log.md by name as\n\
+             `campaign(quern): create — Grind the grain`.\n\n\
+             HOLDS: none.\n"
+        );
+    }
+
+    #[test]
+    fn the_log_is_dated_by_date_else_by_the_utc_date() {
+        use std::process::Command;
+        assert_eq!(today(Command::new("echo").arg("2031-01-02")), "2031-01-02");
+        // A `date` that fails, prints nothing, or prints no date.
+        assert!(!is_date("") && !is_date("Tue Sep 22"));
+        for date in [
+            today(&mut Command::new("false")),
+            today(&mut Command::new("true")),
+            today(Command::new("echo").arg("Tue Sep 22")),
+        ] {
+            assert!(is_date(&date), "{date:?}");
+        }
+    }
+
+    #[test]
+    fn create_never_adopts_anything_already_at_the_path() {
+        let f = make_fixture("claude");
+        let campaigns = f.cdir.parent().unwrap();
+        // An empty directory, and what a rename leaves: a sessions.log.
+        // A real run meets them at create_dir, a dry run at its check.
+        let residue = "2026-09-01T00:00:00Z host old-sid\n";
+        std::fs::create_dir(campaigns.join("empty")).unwrap();
+        std::fs::create_dir(campaigns.join("moved")).unwrap();
+        std::fs::write(campaigns.join("moved/sessions.log"), residue).unwrap();
+        for (address, dry_run) in [
+            ("home/empty", false),
+            ("home/moved", false),
+            ("home/moved", true),
+        ] {
+            let err = create_campaign(&f.estates, address, "b", dry_run).unwrap_err();
+            assert!(
+                matches!(&err, EstateError::Guard(m) if m.ends_with("already exists — refusing to adopt it")),
+                "{err}"
+            );
+        }
+        assert!(names_in(&campaigns.join("empty")).is_empty());
+        assert_eq!(names_in(&campaigns.join("moved")), ["sessions.log"]);
+        assert_eq!(
+            std::fs::read_to_string(campaigns.join("moved/sessions.log")).unwrap(),
+            residue
+        );
+        assert!(progress::logged_messages().is_empty());
+    }
+
+    #[test]
+    fn create_refuses_an_unknown_or_uncloned_estate_and_never_makes_a_campaigns_dir() {
+        let mut f = make_fixture("claude");
+        let bare = f._tmp.path().join("bare");
+        std::fs::create_dir(&bare).unwrap();
+        for (estate, root) in [("gone", f._tmp.path().join("gone")), ("bare", bare.clone())] {
+            let mut row = toml::Table::new();
+            row.insert(
+                "root".to_string(),
+                toml::Value::String(root.to_string_lossy().to_string()),
+            );
+            f.estates
+                .insert(estate.to_string(), toml::Value::Table(row));
+        }
+        for (address, says) in [
+            ("lab/quern", "no estate 'lab'"),
+            ("gone/quern", "not cloned"),
+            ("bare/quern", "no campaigns directory"),
+        ] {
+            let err = create_campaign(&f.estates, address, "b", false).unwrap_err();
+            assert!(
+                matches!(&err, EstateError::Config(m) if m.contains(says)),
+                "{err}"
+            );
+        }
+        assert!(names_in(&bare).is_empty());
+    }
+
+    #[test]
+    fn create_refuses_a_bad_name_an_existing_campaign_or_a_bad_brief() {
+        let f = make_fixture("claude");
+        let long = "b".repeat(121);
+        for (address, brief, reason) in [
+            ("home/Quern", "b", "can't create: a-z 0-9 and single -"),
+            ("home/garden", "b", "already a campaign"),
+            ("home/quern", "  ", "type a one-line brief first"),
+            ("home/quern", long.as_str(), "brief too long (max 120)"),
+        ] {
+            let err = create_campaign(&f.estates, address, brief, false).unwrap_err();
+            assert!(
+                matches!(&err, EstateError::Usage(m) if *m == format!("{address}: {reason}")),
+                "{err}"
+            );
+        }
+        assert_eq!(names_in(f.cdir.parent().unwrap()), ["garden"]);
+        assert!(progress::logged_messages().is_empty());
+    }
+
+    #[test]
+    fn a_failed_write_removes_only_what_create_made() {
+        // A write that stops a byte in, as on a full disk, leaving a
+        // part-written file.
+        fn part_way(f: &mut std::fs::File, text: &str, fails: bool) -> std::io::Result<()> {
+            use std::io::Write;
+            f.write_all(&text.as_bytes()[..1])?;
+            if fails {
+                return Err(std::io::Error::other("disk full"));
+            }
+            f.write_all(&text.as_bytes()[1..])
+        }
+        fn fail_campaign_md(path: &Path, f: &mut std::fs::File, text: &str) -> std::io::Result<()> {
+            part_way(f, text, path.ends_with("campaign.md"))
+        }
+        fn fail_log_md(path: &Path, f: &mut std::fs::File, text: &str) -> std::io::Result<()> {
+            part_way(f, text, path.ends_with("log.md"))
+        }
+        let f = make_fixture("claude");
+        for fill in [fail_campaign_md as Fill, fail_log_md] {
+            let err = create_with(&f.estates, "home/quern", "b", false, fill).unwrap_err();
+            assert!(
+                matches!(&err, EstateError::Config(m) if m.contains("disk full")),
+                "{err}"
+            );
+            // The directory is gone, and the campaign beside it stays.
+            assert_eq!(names_in(f.cdir.parent().unwrap()), ["garden"]);
+        }
+        assert!(f.cdir.join("campaign.md").is_file());
+    }
+
+    #[test]
+    fn a_file_another_writer_puts_in_the_new_directory_is_never_clobbered_or_removed() {
+        // Something drops a log.md in while campaign.md is written:
+        // create_new refuses it, and the cleanup takes back campaign.md
+        // but leaves that file and the directory holding it.
+        fn racer(path: &Path, f: &mut std::fs::File, text: &str) -> std::io::Result<()> {
+            std::fs::write(path.with_file_name("log.md"), "theirs\n")?;
+            std::io::Write::write_all(f, text.as_bytes())
+        }
+        let f = make_fixture("claude");
+        let dir = f.cdir.parent().unwrap().join("quern");
+        let err = create_with(&f.estates, "home/quern", "b", false, racer).unwrap_err();
+        assert!(matches!(err, EstateError::Config(_)), "{err}");
+        assert_eq!(names_in(&dir), ["log.md"]);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("log.md")).unwrap(),
+            "theirs\n"
+        );
+    }
+
+    #[test]
+    fn create_dry_run_runs_every_check_and_writes_and_logs_nothing() {
+        let f = make_fixture("claude");
+        create_campaign(&f.estates, "home/quern", "b", true).unwrap();
+        assert_eq!(names_in(f.cdir.parent().unwrap()), ["garden"]);
+        assert!(progress::logged_messages().is_empty());
     }
 }

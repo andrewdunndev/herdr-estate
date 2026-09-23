@@ -1,22 +1,29 @@
 //! Crossterm events into core events, ratatui drawing, and the terminal
-//! guard. Dispatch of the row Enter selects lives in `crate::dispatch`,
-//! not here — this module only drives the event loop, hands the chosen
-//! row off once the terminal is already restored, and holds a failed
-//! dispatch's error on screen until a key press. Run as a herdr action,
-//! with no terminal to drive, it opens the picker popup instead.
+//! guard. Dispatch of the row Enter selects, or of a campaign to create,
+//! lives in `crate::dispatch`, not here — this module only drives the
+//! event loop, hands the outcome off once the terminal is already
+//! restored, and holds a failed dispatch's error on screen until a key
+//! press. Run as a herdr action, with no terminal to drive, it opens the
+//! picker popup instead.
 
+use std::collections::BTreeMap;
 use std::io::Write;
+use std::path::Path;
 use std::time::Duration;
 
-use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, DisableBracketedPaste, EnableBracketedPaste, Event as TermEvent, KeyCode, KeyEvent,
+    KeyEventKind, KeyModifiers,
+};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use crate::campaign;
 use crate::dispatch;
 use crate::errors::EstateError;
 use crate::herdrcli;
-use crate::paths::non_empty_env;
+use crate::paths::{self, non_empty_env};
 use crate::picker::core::{
     self, AppState, Event as CoreEvent, Indicators, Outcome, Tone, ViewLine,
 };
@@ -38,10 +45,14 @@ struct RestoreGuard {
 
 impl RestoreGuard {
     fn new() -> Self {
-        RestoreGuard {
-            restore: ratatui::restore,
-        }
+        RestoreGuard { restore }
     }
+}
+
+/// Bracketed paste off, then ratatui's own restore.
+fn restore() {
+    let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
+    ratatui::restore();
 }
 
 impl Drop for RestoreGuard {
@@ -119,10 +130,12 @@ pub fn run(
     // screen: the popup closes the moment this process exits, and an
     // error returned straight to `cli::run` would print into a pane that
     // is already gone.
-    let dispatched = match run_interactive(built_rows)? {
+    let state = AppState::new(built_rows).with_estates(creatable_estates(estates));
+    let dispatched = match run_interactive(state)? {
         Outcome::Cancelled => return Ok(0),
         Outcome::Selected(row) => dispatch::open_row(estates, &row),
         Outcome::Fresh(row) => dispatch::fresh_row(estates, &row),
+        Outcome::Create { address, brief } => dispatch::create_and_open(estates, &address, &brief),
     };
     match dispatched {
         Ok(()) => Ok(0),
@@ -191,7 +204,27 @@ fn wait_for_press(events: &mut impl EventSource) {
     }
 }
 
-fn run_interactive(built_rows: Vec<core::Row>) -> Result<Outcome, EstateError> {
+/// The estates a campaign can be created in, those whose campaigns
+/// directory exists, each with that directory for the brief step, under
+/// the root as estates.toml writes it (normally `~/...`), so the step's
+/// "(untracked; not committed)" fits an 80-column popup.
+fn creatable_estates(estates: &toml::Table) -> BTreeMap<String, String> {
+    estates
+        .iter()
+        .filter_map(|(e, row)| {
+            let dir = campaign::campaigns_dir(estates, e)
+                .ok()
+                .filter(|d| d.is_dir())?;
+            let root = row.get("root")?.as_str()?;
+            let shown = dir
+                .strip_prefix(paths::expand(root))
+                .map_or(dir.clone(), |sub| Path::new(root).join(sub));
+            Some((e.clone(), shown.display().to_string()))
+        })
+        .collect()
+}
+
+fn run_interactive(state: AppState) -> Result<Outcome, EstateError> {
     // `try_init` enables raw mode before entering the alternate screen;
     // if the second step fails, raw mode is already on with nothing yet
     // constructed to undo it on drop. Restore directly on this path
@@ -206,7 +239,10 @@ fn run_interactive(built_rows: Vec<core::Row>) -> Result<Outcome, EstateError> {
         }
     };
     let _guard = RestoreGuard::new();
-    pick_in(&mut terminal, built_rows, &mut CrosstermEvents)
+    // A paste arrives whole, so its newlines can't press Enter.
+    crossterm::execute!(std::io::stdout(), EnableBracketedPaste)
+        .map_err(|e| EstateError::Protocol(format!("could not start the terminal: {e}")))?;
+    pick_in(&mut terminal, state, &mut CrosstermEvents)
 }
 
 /// The picker on a terminal that is already set up: herdr's look, read
@@ -216,10 +252,10 @@ fn run_interactive(built_rows: Vec<core::Row>) -> Result<Outcome, EstateError> {
 /// on a `TestBackend` and see the look come from herdr's config.
 fn pick_in<B: ratatui::backend::Backend>(
     terminal: &mut ratatui::Terminal<B>,
-    built_rows: Vec<core::Row>,
+    state: AppState,
     events: &mut impl EventSource,
 ) -> Result<Outcome, EstateError> {
-    event_loop(terminal, AppState::new(built_rows), events, theme::load())
+    event_loop(terminal, state, events, theme::load())
 }
 
 /// Where `event_loop` gets its input from — real crossterm in
@@ -343,6 +379,15 @@ fn event_loop<B: ratatui::backend::Backend>(
                     state = core::update(state, core_event);
                 }
             }
+            // Typed in, first line only and never as Enter, so a paste
+            // can't open a row or create a campaign. Terminals often
+            // paste a newline as CR.
+            TermEvent::Paste(text) => {
+                let first = text.split(['\r', '\n']).next().unwrap_or("");
+                for c in first.chars().filter(|c| !c.is_control()) {
+                    state = core::update(state, CoreEvent::Char(c));
+                }
+            }
             _ => {}
         }
 
@@ -368,7 +413,7 @@ fn translate_key(key: KeyEvent) -> Option<CoreEvent> {
     }
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         return match key.code {
-            KeyCode::Char('c') => Some(CoreEvent::Esc),
+            KeyCode::Char('c') => Some(CoreEvent::Quit),
             KeyCode::Char('n') => Some(CoreEvent::Down),
             KeyCode::Char('p') => Some(CoreEvent::Up),
             KeyCode::Char('f') => Some(CoreEvent::Fresh),
@@ -504,6 +549,80 @@ mod event_loop_tests {
         assert_eq!(outcome, Outcome::Cancelled);
     }
 
+    /// `home`, an estate a campaign can be created in.
+    fn home() -> BTreeMap<String, String> {
+        BTreeMap::from([("home".to_string(), "/e/home/campaigns".to_string())])
+    }
+
+    fn created(address: &str, brief: &str) -> Outcome {
+        Outcome::Create {
+            address: address.to_string(),
+            brief: brief.to_string(),
+        }
+    }
+
+    #[test]
+    fn an_address_then_a_brief_creates_the_campaign() {
+        let mut script: Vec<Scripted> = "home/q"
+            .chars()
+            .map(|c| Scripted::Event(key_press(KeyCode::Char(c))))
+            .collect();
+        for code in [KeyCode::Enter, KeyCode::Char('x'), KeyCode::Enter] {
+            script.push(Scripted::Event(key_press(code)));
+        }
+        let state = AppState::new(one_row()).with_estates(home());
+        let outcome = event_loop(
+            &mut test_terminal(),
+            state,
+            &mut ScriptedEvents::new(script),
+            catppuccin(),
+        )
+        .unwrap();
+        assert_eq!(outcome, created("home/q", "x"));
+    }
+
+    #[test]
+    fn a_paste_types_its_first_line_and_never_presses_enter() {
+        // Were a paste's newlines Enter presses, the first would create
+        // home/q with the brief "x" before the keys after it ran; were
+        // its tab typed, the address would carry it. A CR ends the first
+        // line as an LF does, and the second paste's LF ends its own.
+        let script = vec![
+            Scripted::Event(TermEvent::Paste("home/\tq\rx\r".to_string())),
+            Scripted::Event(key_press(KeyCode::Enter)),
+            Scripted::Event(TermEvent::Paste("y\nz\n".to_string())),
+            Scripted::Event(key_press(KeyCode::Enter)),
+        ];
+        let state = AppState::new(one_row()).with_estates(home());
+        let outcome = event_loop(
+            &mut test_terminal(),
+            state,
+            &mut ScriptedEvents::new(script),
+            catppuccin(),
+        )
+        .unwrap();
+        assert_eq!(outcome, created("home/q", "y"));
+    }
+
+    #[test]
+    fn only_an_estate_with_a_campaigns_directory_offers_create() {
+        let d = crate::test_support::TempDir::new();
+        let _env = crate::test_support::EnvGuard::set(&[("HOME", d.path().to_str().unwrap())]);
+        let mut estates = toml::Table::new();
+        for name in ["home", "bare", "gone"] {
+            let mut row = toml::Table::new();
+            row.insert("root".to_string(), toml::Value::String(format!("~/{name}")));
+            estates.insert(name.to_string(), toml::Value::Table(row));
+        }
+        std::fs::create_dir_all(d.path().join("home/campaigns")).unwrap();
+        std::fs::create_dir(d.path().join("bare")).unwrap();
+        // Under the root as written, not expanded.
+        assert_eq!(
+            creatable_estates(&estates),
+            BTreeMap::from([("home".to_string(), "~/home/campaigns".to_string())])
+        );
+    }
+
     #[test]
     fn a_key_event_reaches_core_update_and_can_select_a_row() {
         let mut terminal = test_terminal();
@@ -626,7 +745,7 @@ mod event_loop_tests {
         let mut terminal = test_terminal();
         let mut events = ScriptedEvents::new(vec![Scripted::Event(key_press(KeyCode::Esc))]);
         assert_eq!(
-            pick_in(&mut terminal, rows, &mut events).unwrap(),
+            pick_in(&mut terminal, AppState::new(rows), &mut events).unwrap(),
             Outcome::Cancelled
         );
         let buf = terminal.backend().buffer();
@@ -844,10 +963,10 @@ mod translate_key_tests {
     }
 
     #[test]
-    fn ctrl_c_is_esc() {
+    fn ctrl_c_is_quit() {
         assert!(matches!(
             translate_key(press(KeyCode::Char('c'), KeyModifiers::CONTROL)),
-            Some(CoreEvent::Esc)
+            Some(CoreEvent::Quit)
         ));
     }
 

@@ -9,8 +9,8 @@
 herdr-estate is a plugin for the [herdr](https://herdr.dev) terminal
 workspace manager. It gives herdr *estates* and *campaigns*: long-running
 threads of agent work, addressed as `estate/campaign`, that outlive any
-one conversation. The plugin owns two files plus a continuity log it
-reads and writes itself; herdr's own resume is never used.
+one conversation. The plugin reads two files, keeps its own continuity
+log, and can create campaigns; herdr's own resume is never used.
 
 ## Install
 
@@ -104,10 +104,12 @@ again. No other variable is touched.
 - `herdr-estate fresh [<address>]`: retire the latest conversation and
   start a new one in the same space.
 - `herdr-estate list`: list every campaign the estate table knows.
+- `herdr-estate create <address> --brief <text>`: write a new
+  campaign's `campaign.md` and `log.md`, uncommitted; no herdr call.
 
 With no `<address>`, the current workspace's label is used.
-`--dry-run` prints the plan for `resume` or `fresh` after the same
-reads and guards and changes nothing; it needs an explicit
+`--dry-run` prints the plan for `resume`, `fresh` or `create` after
+the same reads and guards and changes nothing; it needs an explicit
 `<address>`. Each step prints to stderr and every run appends to
 `events.log`; see [docs/events.md](docs/events.md).
 
@@ -136,7 +138,9 @@ Live rows sort first, then dormant by most recent, then new. Type to
 filter; the footer lists the keys. Enter focuses the row's
 workspace, first resuming a dormant campaign or starting a new one
 fresh. It re-reads the workspace and goes through the same verbs and
-guards as the CLI. Glyphs follow herdr's config; a non-default theme
+guards as the CLI. A filter `estate/name` naming no campaign offers
+`+ create`: Enter, a one-line brief, and Enter again create it and
+start it fresh. Glyphs follow herdr's config; a non-default theme
 gets terminal colours.
 
 It opens as a popup from the key bound above, or by hand:

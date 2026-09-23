@@ -1,5 +1,5 @@
 //! Integration tests for the built `herdr-estate` binary: subcommands,
-//! `--dry-run`, exit codes, and address derivation from
+//! `--dry-run`, exit codes, `create`, and address derivation from
 //! `HERDR_WORKSPACE_ID`.
 //!
 //! Each test spawns the compiled binary (`env!("CARGO_BIN_EXE_herdr-estate")`)
@@ -469,4 +469,61 @@ fn unknown_campaign_is_a_handled_error_not_a_crash() {
     assert_eq!(out.status.code(), Some(1));
     assert!(stderr(&out).starts_with("herdr-estate:"));
     assert_eq!(f.fake.call_count(), 0);
+}
+
+#[test]
+fn create_writes_the_campaign_and_never_calls_herdr() {
+    let (f, root) = fixture();
+    std::fs::create_dir_all(root.join("campaigns")).unwrap();
+    // Any herdr call would fail the run: create makes none.
+    f.fake.set_response(0, "", 1);
+    let out = run(&f, &["create", "home/quern", "--brief", "Grind it."], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let dir = root.join("campaigns/quern");
+    assert_eq!(
+        stdout(&out),
+        format!("created  home/quern  {}\n", dir.display())
+    );
+    assert!(stderr(&out).contains(&format!(
+        "herdr-estate: home/quern: creating campaign.md and log.md in {} (untracked)",
+        dir.display()
+    )));
+    assert!(dir.join("campaign.md").is_file());
+    assert!(dir.join("log.md").is_file());
+    assert_eq!(f.fake.call_count(), 0);
+}
+
+#[test]
+fn create_dry_run_lists_both_files_and_writes_and_logs_nothing() {
+    let (f, root) = fixture();
+    std::fs::create_dir_all(root.join("campaigns")).unwrap();
+    f.fake.set_response(0, "", 1);
+    let out = run(
+        &f,
+        &["create", "home/quern", "--brief", "Grind it.", "--dry-run"],
+        &[],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let dir = root.join("campaigns/quern");
+    assert_eq!(
+        stdout(&out),
+        format!(
+            "would create:\n  {}\n  {}\n",
+            dir.join("campaign.md").display(),
+            dir.join("log.md").display()
+        )
+    );
+    assert!(!dir.exists());
+    assert_eq!(f.fake.call_count(), 0);
+    // The run line, and no progress line after it.
+    let events = std::fs::read_to_string(f.state_dir.join("events.log")).unwrap();
+    assert_eq!(events.lines().count(), 1, "{events}");
+}
+
+#[test]
+fn create_without_its_address_or_its_brief_exits_2() {
+    let (f, _root) = fixture();
+    for args in [&["create", "home/quern"][..], &["create", "--brief", "b"]] {
+        assert_eq!(run(&f, args, &[]).status.code(), Some(2), "{args:?}");
+    }
 }

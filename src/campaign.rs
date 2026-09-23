@@ -117,14 +117,15 @@ fn scalar_non_empty_str(s: &Scalar) -> Option<&str> {
     }
 }
 
-pub fn resolve(
-    estates: &toml::Table,
-    address: &str,
-    dry_run: bool,
-) -> Result<Campaign, EstateError> {
-    let (estate_name, campaign_name) = parse_address(address)?;
+/// The estate's row in the table, its root, expanded, which must be a
+/// directory, and `<root>/<campaigns>`, which may not exist: what every
+/// path in the estate hangs off.
+fn estate_dirs<'a>(
+    estates: &'a toml::Table,
+    estate_name: &str,
+) -> Result<(&'a toml::Table, PathBuf, PathBuf), EstateError> {
     let row = estates
-        .get(&estate_name)
+        .get(estate_name)
         .and_then(|v| v.as_table())
         .ok_or_else(|| {
             EstateError::Config(format!("no estate '{estate_name}' in the estate table"))
@@ -140,12 +141,28 @@ pub fn resolve(
             root.display()
         )));
     }
-    let campaigns_dir = root.join(
+    let campaigns = root.join(
         row.get("campaigns")
             .and_then(|v| v.as_str())
             .unwrap_or(crate::config::DEFAULT_CAMPAIGNS_DIR),
     );
-    let cdir = campaigns_dir.join(&campaign_name);
+    Ok((row, root, campaigns))
+}
+
+/// `<root>/<campaigns>`: where the estate's campaigns live. It may not
+/// exist.
+pub fn campaigns_dir(estates: &toml::Table, estate_name: &str) -> Result<PathBuf, EstateError> {
+    estate_dirs(estates, estate_name).map(|(_, _, campaigns)| campaigns)
+}
+
+pub fn resolve(
+    estates: &toml::Table,
+    address: &str,
+    dry_run: bool,
+) -> Result<Campaign, EstateError> {
+    let (estate_name, campaign_name) = parse_address(address)?;
+    let (row, root, campaigns) = estate_dirs(estates, &estate_name)?;
+    let cdir = campaigns.join(&campaign_name);
     let md = cdir.join("campaign.md");
     if !md.is_file() {
         return Err(EstateError::Config(format!(

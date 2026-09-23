@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- A picker filter `estate/name` that names no campaign offers
+  `+ create`: Enter asks for a one-line brief, and Enter again writes
+  the campaign's `campaign.md` and `log.md`, uncommitted, then starts
+  it fresh. Nothing is written while any workspace carries the address,
+  and nothing already at the path is adopted. `herdr-estate create
+  <address> --brief <text>` writes the same two files and calls no
+  herdr. A paste into the picker types only its first line.
 - Ctrl-f in the picker starts a fresh conversation on the selected row
   instead of resuming it. It does nothing on a row whose agent is
   running, and the detail line says so. Alt and Cmd chords no longer

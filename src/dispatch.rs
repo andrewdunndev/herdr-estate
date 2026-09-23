@@ -1,6 +1,7 @@
 //! Dispatch of a picker row: what Enter (or Ctrl-f) does with the row the
-//! picker's core selected. Lives beside `verbs`, not in `picker::shell` — it
-//! reuses `verbs::resume_with_ids`/`fresh_with_ids` exactly, the same
+//! picker's core selected, or with a campaign it asked to create. Lives
+//! beside `verbs`, not in `picker::shell` — it reuses
+//! `verbs::resume_with_ids`/`fresh_with_ids` exactly, the same
 //! functions `herdr-estate resume`/`fresh` call, so every guard those
 //! verbs enforce (ownership, alive, duplicate labels, unconfirmed close,
 //! validation before close) applies unchanged. The picker adds no way
@@ -77,6 +78,37 @@ pub fn fresh_row(estates: &toml::Table, row: &Row) -> Result<(), EstateError> {
         ))
     })?;
     focus(&row.address, workspace_id)
+}
+
+/// Enter on the picker's `+ create` line, with a brief typed: create the
+/// campaign (`verbs::create_campaign`), then open it as the New row it
+/// now is, through `open_row`. It reads `workspace list` first, and
+/// while any workspace carries the address (even one herdr-estate did
+/// not make, which the picker never shows) it writes and logs nothing.
+/// If the open then fails, nothing is deleted: the campaign stays, a new
+/// row, and a step says so.
+pub fn create_and_open(
+    estates: &toml::Table,
+    address: &str,
+    brief: &str,
+) -> Result<(), EstateError> {
+    if let Some(ws) = doubleopen::live_workspace(address)? {
+        return Err(EstateError::Guard(format!(
+            "{address}: workspace {} already carries this label — refusing to create a campaign under it",
+            ws.workspace_id
+        )));
+    }
+    verbs::create_campaign(estates, address, brief, false)?;
+    let row = Row {
+        address: address.to_string(),
+        state: RowState::New,
+        brief: String::new(),
+    };
+    open_row(estates, &row).inspect_err(|_| {
+        progress::step(&format!(
+            "{address}: campaign created, but starting it failed — it stays as a new row"
+        ));
+    })
 }
 
 fn focus(address: &str, workspace_id: String) -> Result<(), EstateError> {
@@ -474,5 +506,91 @@ mod tests {
         let err = open_row(&f.estates, &row).unwrap_err();
         assert!(matches!(err, EstateError::Guard(_)));
         assert_eq!(f.fake.call_count(), 1);
+    }
+
+    // --- create_and_open ---
+
+    /// `home/quern`'s directory, under a campaigns directory that exists.
+    fn quern(f: &Fixture) -> std::path::PathBuf {
+        let campaigns = f.root.join("campaigns");
+        std::fs::create_dir_all(&campaigns).unwrap();
+        campaigns.join("quern")
+    }
+
+    #[test]
+    fn create_refuses_while_any_workspace_carries_the_label_and_writes_nothing() {
+        let f = make_fixture();
+        let dir = quern(&f);
+        // Not alive and not ours: a workspace build_rows never shows.
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/quern", "agent_status": "unknown"}
+            ]}}"#,
+            0,
+        );
+        let err = create_and_open(&f.estates, "home/quern", "Grind.").unwrap_err();
+        assert!(matches!(err, EstateError::Guard(_)));
+        assert_eq!(f.fake.call_count(), 1);
+        assert!(!dir.exists());
+        assert!(crate::progress::logged_messages().is_empty());
+    }
+
+    #[test]
+    fn a_create_the_verb_refuses_never_starts_the_campaign() {
+        // The label is free, but the campaign appeared after the picker
+        // built its rows: the verb refuses, and nothing opens it.
+        let f = make_fixture();
+        let dir = f.campaign("garden");
+        f.fake.set_response(0, empty_list(), 0);
+        let err = create_and_open(&f.estates, "home/garden", "Grind.").unwrap_err();
+        assert!(
+            matches!(&err, EstateError::Usage(m) if m.ends_with("already a campaign")),
+            "{err}"
+        );
+        assert_eq!(f.fake.call_count(), 1); // only the label check
+        assert!(crate::continuity::read(&dir).is_empty());
+        assert!(crate::progress::logged_messages().is_empty());
+    }
+
+    #[test]
+    fn create_writes_the_campaign_then_opens_it_as_a_new_row() {
+        let f = make_fixture();
+        let dir = quern(&f);
+        f.fake.set_response(0, empty_list(), 0); // the label check
+        f.fake.set_response(1, empty_list(), 0); // fresh's own check
+        f.fake.set_response(2, CREATE_OK, 0);
+        f.fake.set_response(3, r#"{"result": {}}"#, 0);
+        f.fake.set_response(4, r#"{"result": {}}"#, 0);
+
+        create_and_open(&f.estates, "home/quern", "Grind.").unwrap();
+
+        assert_eq!(f.fake.call_count(), 5);
+        assert_eq!(f.fake.argv(0), vec!["workspace", "list"]);
+        assert_eq!(f.fake.argv(1), vec!["workspace", "list"]);
+        assert_eq!(f.fake.argv(2)[..2], ["workspace", "create"]);
+        assert_eq!(f.fake.argv(3)[..2], ["agent", "start"]);
+        assert_eq!(f.fake.argv(4), vec!["workspace", "focus", "w-new"]);
+        assert!(dir.join("campaign.md").is_file());
+        assert_eq!(crate::continuity::read(&dir).len(), 1);
+        assert!(crate::progress::logged_messages()[0]
+            .starts_with("home/quern: creating campaign.md and log.md in "));
+    }
+
+    #[test]
+    fn a_failed_start_deletes_nothing_and_says_the_campaign_stays_a_new_row() {
+        let f = make_fixture();
+        let dir = quern(&f);
+        f.fake.set_response(0, empty_list(), 0);
+        f.fake.set_response(1, empty_list(), 0);
+        f.fake.set_response(2, "", 1); // workspace create fails
+
+        assert!(create_and_open(&f.estates, "home/quern", "Grind.").is_err());
+        assert!(dir.join("campaign.md").is_file());
+        assert!(dir.join("log.md").is_file());
+        assert_eq!(
+            crate::progress::logged_messages().last().unwrap(),
+            "home/quern: campaign created, but starting it failed — it stays as a new row"
+        );
     }
 }

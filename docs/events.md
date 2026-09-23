@@ -15,14 +15,31 @@ herdr-estate: home/garden: claude is ready in w9
 herdr-estate: home/garden: focusing w9
 ```
 
+`create` makes the campaign's directory, then says one line before it
+writes the two files; it never commits them:
+
+```
+herdr-estate: home/quern: creating campaign.md and log.md in /home/me/estates/home/campaigns/quern (untracked)
+```
+
+The picker's `+ create` runs that, then opens the campaign as a new row,
+with the lines above. If the start fails, nothing is deleted: the
+campaign stays, a new row, and one more line says so:
+
+```
+herdr-estate: home/quern: campaign created, but starting it failed — it stays as a new row
+```
+
 When a dispatch from the picker fails, the popup stays open on the error
 until a key press. Keys typed during the wait are discarded first, so
 they can't dismiss it unread.
 
 A `--dry-run` prints no progress lines, and neither does a refusal made
 before anything changes: a running agent, a duplicate label, a workspace
-herdr-estate did not create. A close that can't be confirmed is refused
-after its `closing` line, and nothing is created.
+herdr-estate did not create, a name `create` refuses, anything already
+at its path, or, for the picker's `+ create`, any workspace already
+carrying the address. A close that can't be confirmed is refused after
+its `closing` line, and nothing is created.
 
 ## events.log
 

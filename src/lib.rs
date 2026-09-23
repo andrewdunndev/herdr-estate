@@ -11,6 +11,7 @@ pub mod doubleopen;
 pub mod errors;
 pub mod frontmatter;
 pub mod herdrcli;
+pub mod name;
 pub mod ownership;
 pub mod paths;
 pub mod picker;

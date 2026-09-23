@@ -4,10 +4,16 @@
 //! `View` it returns, mapping each segment's `Tone` to one of herdr's
 //! colours. The layout copies herdr's pane navigator (v0.9.1
 //! overlays.rs:706-957): a filter line with a count, a rule, the rows, a
-//! detail line and a key-hint footer, behind a one-column gutter.
+//! detail line and a key-hint footer, behind a one-column gutter. A
+//! filter `estate/name` that names no campaign offers `+ create`, whose
+//! brief step is ours.
+
+use std::collections::BTreeMap;
 
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+
+use crate::name;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RowState {
@@ -63,7 +69,22 @@ pub enum Outcome {
     Selected(Row),
     /// Ctrl-f: start a fresh conversation on the row instead.
     Fresh(Row),
+    /// Enter on the brief step: create `address`, the filter, with
+    /// `brief`, trimmed, then start it fresh.
+    Create {
+        address: String,
+        brief: String,
+    },
     Cancelled,
+}
+
+/// What the selection bar is on: a row, tracked by address, not index,
+/// so it survives a filter change as long as that row still matches; or
+/// the `+ create` line after the matches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Selection {
+    Row(String),
+    Create,
 }
 
 #[derive(Debug, Clone)]
@@ -72,9 +93,14 @@ pub struct AppState {
     /// `self.filter` on every read rather than storing a second list.
     rows: Vec<Row>,
     pub filter: String,
-    /// Tracked by address, not index, so it survives a filter change as
-    /// long as the selected row still matches.
-    selected_address: Option<String>,
+    selected: Option<Selection>,
+    /// The estates a campaign can be created in, each with its campaigns
+    /// directory as the brief step shows it. Empty, nothing offers create.
+    estates: BTreeMap<String, String>,
+    /// The brief being typed on the create step; `None` on the list.
+    brief: Option<String>,
+    /// Enter was pressed on an empty brief: the hint asks for one.
+    brief_wanted: bool,
     pub done: Option<Outcome>,
 }
 
@@ -87,18 +113,29 @@ pub enum Event {
     Enter,
     Fresh,
     Esc,
+    /// Ctrl-c: close the picker, from the brief step too.
+    Quit,
 }
 
 impl AppState {
     pub fn new(rows: Vec<Row>) -> Self {
         let rows = sort_rows(rows);
-        let selected_address = rows.first().map(|r| r.address.clone());
+        let selected = rows.first().map(|r| Selection::Row(r.address.clone()));
         AppState {
             rows,
             filter: String::new(),
-            selected_address,
+            selected,
+            estates: BTreeMap::new(),
+            brief: None,
+            brief_wanted: false,
             done: None,
         }
+    }
+
+    /// Offer `+ create` in `estates`: estate name to its campaigns
+    /// directory, for the brief step to show.
+    pub fn with_estates(self, estates: BTreeMap<String, String>) -> Self {
+        AppState { estates, ..self }
     }
 
     pub fn filtered(&self) -> Vec<&Row> {
@@ -107,11 +144,39 @@ impl AppState {
             .filter(|r| r.address.contains(&self.filter))
             .collect()
     }
+
+    /// Why a filter `estate/name` can't be created: an estate it can't
+    /// be created in, or `name::refusal`'s reason. `None` when it can,
+    /// and for a filter with no '/', which never offers create.
+    fn create_refusal(&self) -> Option<String> {
+        let (estate, name) = self.filter.split_once('/')?;
+        if !self.estates.contains_key(estate) {
+            return Some(format!("no estate '{estate}'"));
+        }
+        let known: Vec<&str> = self.rows.iter().map(|r| r.address.as_str()).collect();
+        name::refusal(estate, name, &known)
+    }
+
+    /// Whether `+ create` follows the matches.
+    fn creates(&self) -> bool {
+        self.filter.contains('/') && self.create_refusal().is_none()
+    }
 }
 
-fn current_index(filtered: &[&Row], selected: &Option<String>) -> Option<usize> {
-    let addr = selected.as_deref()?;
-    filtered.iter().position(|r| r.address == addr)
+/// Where the selection sits: its row's index among the matches, or one
+/// past the last for `+ create`.
+fn current_index(filtered: &[&Row], selected: &Option<Selection>) -> Option<usize> {
+    match selected.as_ref()? {
+        Selection::Row(addr) => filtered.iter().position(|r| &r.address == addr),
+        Selection::Create => Some(filtered.len()),
+    }
+}
+
+/// What sits at `i`: a match, or one past the last, `+ create`.
+fn selection_at(filtered: &[&Row], i: usize) -> Selection {
+    filtered
+        .get(i)
+        .map_or(Selection::Create, |r| Selection::Row(r.address.clone()))
 }
 
 /// A live row whose agent is running: anything but "unknown", as
@@ -121,22 +186,46 @@ fn running(row: &Row) -> bool {
     matches!(&row.state, RowState::Live { agent_status, .. } if agent_status != "unknown")
 }
 
-/// After the filter text changes, keep the current selection if it still
-/// matches; otherwise fall back to the first row of the new filtered list
-/// (or none, when nothing matches).
+/// After the filter text changes, keep the current selection while it is
+/// still there (its row matches, or `+ create` is still offered);
+/// otherwise select the first match, else `+ create`, else nothing.
 fn recompute_selection(state: &mut AppState) {
     let filtered = state.filtered();
-    let still_valid = state
-        .selected_address
-        .as_deref()
-        .is_some_and(|addr| filtered.iter().any(|r| r.address == addr));
-    if still_valid {
-        return;
+    let items = filtered.len() + usize::from(state.creates());
+    if current_index(&filtered, &state.selected).is_none_or(|i| i >= items) {
+        state.selected = (items > 0).then(|| selection_at(&filtered, 0));
     }
-    state.selected_address = filtered.first().map(|r| r.address.clone());
 }
 
 pub fn update(mut state: AppState, event: Event) -> AppState {
+    if let Some(brief) = &mut state.brief {
+        match event {
+            // One line, at most `BRIEF_MAX` characters.
+            Event::Char(c) if !c.is_control() && brief.chars().count() < name::BRIEF_MAX => {
+                brief.push(c);
+            }
+            Event::Backspace => {
+                brief.pop();
+            }
+            // An empty brief creates nothing, so a double Enter on a
+            // typo only asks for one.
+            Event::Enter if brief.trim().is_empty() => state.brief_wanted = true,
+            Event::Enter => {
+                state.done = Some(Outcome::Create {
+                    address: state.filter.clone(),
+                    brief: brief.trim().to_string(),
+                });
+            }
+            // Back to the list, the filter as it was.
+            Event::Esc => {
+                state.brief = None;
+                state.brief_wanted = false;
+            }
+            Event::Quit => state.done = Some(Outcome::Cancelled),
+            _ => {}
+        }
+        return state;
+    }
     match event {
         Event::Char(c) => {
             state.filter.push(c);
@@ -146,39 +235,34 @@ pub fn update(mut state: AppState, event: Event) -> AppState {
             state.filter.pop();
             recompute_selection(&mut state);
         }
-        Event::Up => {
+        Event::Up | Event::Down => {
             let filtered = state.filtered();
-            if let Some(idx) = current_index(&filtered, &state.selected_address) {
-                if idx > 0 {
-                    state.selected_address = Some(filtered[idx - 1].address.clone());
+            let items = filtered.len() + usize::from(state.creates());
+            let to = current_index(&filtered, &state.selected).and_then(|i| match event {
+                Event::Up => i.checked_sub(1),
+                _ => Some(i + 1).filter(|&j| j < items),
+            });
+            if let Some(j) = to {
+                state.selected = Some(selection_at(&filtered, j));
+            }
+        }
+        Event::Enter | Event::Fresh => {
+            let filtered = state.filtered();
+            // With nothing selected (nothing matches) this does nothing:
+            // no `Outcome` is set, and the picker stays open.
+            match current_index(&filtered, &state.selected).map(|i| filtered.get(i)) {
+                // Enter or Ctrl-f on `+ create`: the brief comes first.
+                Some(None) => state.brief = Some(String::new()),
+                Some(Some(row)) if matches!(event, Event::Enter) => {
+                    state.done = Some(Outcome::Selected((*row).clone()));
                 }
-            }
-        }
-        Event::Down => {
-            let filtered = state.filtered();
-            if let Some(idx) = current_index(&filtered, &state.selected_address) {
-                if idx + 1 < filtered.len() {
-                    state.selected_address = Some(filtered[idx + 1].address.clone());
+                Some(Some(row)) if !running(row) => {
+                    state.done = Some(Outcome::Fresh((*row).clone()));
                 }
+                _ => {}
             }
         }
-        Event::Enter => {
-            let filtered = state.filtered();
-            // Enter on an empty filtered list (or a selection that
-            // somehow names no row) does nothing: no `Outcome` is set,
-            // and the picker stays open.
-            if let Some(idx) = current_index(&filtered, &state.selected_address) {
-                state.done = Some(Outcome::Selected(filtered[idx].clone()));
-            }
-        }
-        Event::Fresh => {
-            let filtered = state.filtered();
-            let idx = current_index(&filtered, &state.selected_address);
-            if let Some(idx) = idx.filter(|&i| !running(filtered[i])) {
-                state.done = Some(Outcome::Fresh(filtered[idx].clone()));
-            }
-        }
-        Event::Esc => {
+        Event::Esc | Event::Quit => {
             state.done = Some(Outcome::Cancelled);
         }
     }
@@ -327,6 +411,9 @@ const FOOTER: [&str; 5] = [
     "fresh ctrl+f",
     "close esc",
 ];
+
+/// The brief step's key hints, in the footer's order [ours].
+const BRIEF_FOOTER: [&str; 3] = ["create and start enter", "back esc", "quit ctrl+c"];
 
 /// With fewer cells than this left for an address, a row drops its meta
 /// to give the address that room back [ours; the navigator clips meta,
@@ -553,10 +640,11 @@ fn scroll_offset(selected_idx: usize, total: usize, window: usize) -> usize {
 /// Lay `state` out as one `width` x `height` frame in herdr's navigator
 /// layout: the filter line, a rule, the list, a detail line for the
 /// selected row and a key-hint footer, as far as the height tiers allow
-/// (`Tiers::for_height`). Every line is exactly `width` cells, and
-/// nothing wraps. When more rows match than the list holds, it scrolls
-/// so the selected row is always drawn. No vertical padding: herdr's
-/// modals put their first line right under the border.
+/// (`Tiers::for_height`); on the create step, the brief step instead.
+/// Every line is exactly `width` cells, and nothing wraps. When more
+/// rows match than the list holds, it scrolls so the selected row is
+/// always drawn. No vertical padding: herdr's modals put their first
+/// line right under the border.
 pub fn view(state: &AppState, width: usize, height: usize, ind: Indicators) -> View {
     if height == 0 {
         return View {
@@ -564,9 +652,12 @@ pub fn view(state: &AppState, width: usize, height: usize, ind: Indicators) -> V
             cursor: None,
         };
     }
+    if let Some(brief) = &state.brief {
+        return brief_view(state, brief, width, height);
+    }
     let tiers = Tiers::for_height(height);
     let filtered = state.filtered();
-    let selected_idx = current_index(&filtered, &state.selected_address);
+    let selected_idx = current_index(&filtered, &state.selected);
 
     let (filter, cursor) = filter_line(&state.filter, filtered.len(), state.rows.len(), width);
     let mut lines = vec![filter];
@@ -582,11 +673,40 @@ pub fn view(state: &AppState, width: usize, height: usize, ind: Indicators) -> V
         ind,
     ));
     if tiers.detail {
-        lines.push(detail_line(selected_idx.map(|i| filtered[i]), width));
+        lines.push(detail_line(
+            selected_idx.and_then(|i| filtered.get(i).copied()),
+            width,
+        ));
     }
     if tiers.footer {
-        lines.push(footer_line(width));
+        lines.push(footer_line(&FOOTER, width));
     }
+    View { lines, cursor }
+}
+
+/// The brief step, after Enter on `+ create`: the input first, so even a
+/// one-row popup shows it, cut from the left so what was typed last
+/// stays in view; then where the campaign will go, and the keys.
+fn brief_view(state: &AppState, brief: &str, width: usize, height: usize) -> View {
+    let prompt = format!("brief for {}> ", state.filter);
+    let mut input = LineBuilder::new(width);
+    input.push(" ", Tone::Fill);
+    input.push(&prompt, Tone::Muted);
+    let start = 2 + cells(&prompt);
+    let visible = tail_before_cursor(brief, width.saturating_sub(start + 1));
+    input.push(visible, Tone::Text);
+    let cursor =
+        (start + 1 < width).then(|| (u16::try_from(start + cells(visible)).unwrap_or(u16::MAX), 0));
+    let (estate, name) = state.filter.split_once('/').unwrap_or_default();
+    let dir = state.estates.get(estate).map_or("", String::as_str);
+    let place = format!("in {dir}/{name} (untracked; not committed)");
+    let hint = if state.brief_wanted && brief.trim().is_empty() {
+        note_line("type a one-line brief first", width)
+    } else {
+        footer_line(&BRIEF_FOOTER, width)
+    };
+    let mut lines = vec![input.finish(false), note_line(&place, width), hint];
+    lines.resize_with(height, || LineBuilder::new(width).finish(false));
     View { lines, cursor }
 }
 
@@ -650,13 +770,14 @@ fn rule_line(width: usize) -> ViewLine {
     line.finish(false)
 }
 
-/// The list: exactly `height` lines. The window of matching rows that
-/// holds the selection, or an empty state on the first line, then blank
-/// lines. With no campaigns at all it says " no campaigns" [ours],
-/// whatever is typed, as the count above it says "0 campaigns".
-/// Otherwise an empty list means a typed filter hides every campaign
-/// (an empty filter matches them all), and it says " no matching
-/// campaigns" (herdr's " no matching worktrees",
+/// The list: exactly `height` lines. The window of matching rows, and
+/// `+ create` after them, that holds the selection, or an empty state
+/// on the first line, then blank lines. A filter `estate/name` that
+/// can't be created says why [ours]. Otherwise, with no campaigns at
+/// all it says " no campaigns" [ours], whatever is typed, as the count
+/// above it says "0 campaigns"; else an empty list means a typed filter
+/// hides every campaign (an empty filter matches them all), and it says
+/// " no matching campaigns" (herdr's " no matching worktrees",
 /// worktree_overlays.rs:248).
 fn list_lines(
     state: &AppState,
@@ -666,15 +787,16 @@ fn list_lines(
     height: usize,
     ind: Indicators,
 ) -> Vec<ViewLine> {
-    let mut lines: Vec<ViewLine> = if filtered.is_empty() {
-        let message = if state.rows.is_empty() {
-            "no campaigns"
-        } else {
-            "no matching campaigns"
+    let items = filtered.len() + usize::from(state.creates());
+    let mut lines: Vec<ViewLine> = if items == 0 {
+        let message = match state.create_refusal() {
+            Some(reason) => reason,
+            None if state.rows.is_empty() => "no campaigns".to_string(),
+            None => "no matching campaigns".to_string(),
         };
-        vec![note_line(message, width)]
+        vec![note_line(&message, width)]
     } else {
-        let offset = scroll_offset(selected_idx.unwrap_or(0), filtered.len(), height);
+        let offset = scroll_offset(selected_idx.unwrap_or(0), items, height);
         // As wide as the longest address the filter shows, so the
         // briefs after it line up.
         let column = filtered
@@ -683,13 +805,11 @@ fn list_lines(
             .max()
             .unwrap_or(0)
             .min(MAX_ADDRESS_CELLS);
-        filtered
-            .iter()
-            .skip(offset)
+        (offset..items)
             .take(height)
-            .map(|row| {
-                let selected = state.selected_address.as_deref() == Some(row.address.as_str());
-                row_line(row, column, width, ind, selected)
+            .map(|i| match filtered.get(i) {
+                Some(row) => row_line(row, column, width, ind, selected_idx == Some(i)),
+                None => create_line(&state.filter, width, selected_idx == Some(i)),
             })
             .collect()
     };
@@ -746,13 +866,22 @@ fn row_line(row: &Row, column: usize, width: usize, ind: Indicators, selected: b
     line.finish(selected)
 }
 
+/// `+ create {address}` after the matches, the "+" in the glyph column
+/// [ours].
+fn create_line(address: &str, width: usize, selected: bool) -> ViewLine {
+    let mut line = LineBuilder::new(width);
+    line.push(" ", Tone::Fill);
+    line.push(&format!("+ create {address}"), Tone::Text);
+    line.finish(selected)
+}
+
 /// Row H−2: " {address} · {action} · {fresh}" for the selected row, the
 /// navigator's detail line (overlays.rs:920-930). The action says what
 /// Enter will do, in `dispatch::open_row`'s terms, and the last part
 /// whether Ctrl-f will start fresh or, on a running agent, why not.
 /// Hard-clipped with no "…", as herdr clips its own detail line
 /// (`put_text`, render.rs:367-372): the ellipsis is only for a row's
-/// address and brief. Blank when nothing is selected.
+/// address and brief. Blank when no row is selected.
 fn detail_line(row: Option<&Row>, width: usize) -> ViewLine {
     let Some(row) = row else {
         return LineBuilder::new(width).finish(false);
@@ -772,10 +901,10 @@ fn detail_line(row: Option<&Row>, width: usize) -> ViewLine {
 
 /// Row H−1: the key hints. When the footer is too narrow for all of
 /// them, whole hints drop from the end [ours; herdr just clips].
-fn footer_line(width: usize) -> ViewLine {
+fn footer_line(hints: &[&str], width: usize) -> ViewLine {
     let room = text_room(width);
     let mut text = String::new();
-    for hint in FOOTER {
+    for hint in hints {
         let next = if text.is_empty() {
             hint.to_string()
         } else {
@@ -889,7 +1018,7 @@ mod tests {
     fn movement_clamps_at_the_top() {
         let state = AppState::new(sample_rows()); // selected = home/garden (rank 0)
         let state = update(state, Event::Up);
-        assert_eq!(state.selected_address.as_deref(), Some("home/garden"));
+        assert_eq!(selected(&state), Some("home/garden"));
     }
 
     #[test]
@@ -898,7 +1027,7 @@ mod tests {
         for _ in 0..10 {
             state = update(state, Event::Down);
         }
-        assert_eq!(state.selected_address.as_deref(), Some("home/cellar"));
+        assert_eq!(selected(&state), Some("home/cellar"));
     }
 
     #[test]
@@ -911,7 +1040,7 @@ mod tests {
         state = update(state, Event::Down); // lab/bench
         state = update(state, Event::Down); // home/taxes
         state = update(state, Event::Up); // back to lab/bench
-        assert_eq!(state.selected_address.as_deref(), Some("lab/bench"));
+        assert_eq!(selected(&state), Some("lab/bench"));
     }
 
     #[test]
@@ -966,11 +1095,11 @@ mod tests {
     fn selection_survives_a_filter_change_and_restores_on_widen() {
         let mut state = AppState::new(sample_rows());
         state = update(state, Event::Down); // lab/bench
-        assert_eq!(state.selected_address.as_deref(), Some("lab/bench"));
+        assert_eq!(selected(&state), Some("lab/bench"));
         state = update(state, Event::Char('b'));
-        assert_eq!(state.selected_address.as_deref(), Some("lab/bench"));
+        assert_eq!(selected(&state), Some("lab/bench"));
         state = update(state, Event::Backspace);
-        assert_eq!(state.selected_address.as_deref(), Some("lab/bench"));
+        assert_eq!(selected(&state), Some("lab/bench"));
     }
 
     #[test]
@@ -982,7 +1111,7 @@ mod tests {
         for c in ['h', 'o', 'm', 'e'] {
             state = update(state, Event::Char(c));
         }
-        assert_eq!(state.selected_address.as_deref(), Some("home/garden"));
+        assert_eq!(selected(&state), Some("home/garden"));
     }
 
     fn typed(mut state: AppState, text: &str) -> AppState {
@@ -990,6 +1119,30 @@ mod tests {
             state = update(state, Event::Char(c));
         }
         state
+    }
+
+    /// The selected row's address: `None` for nothing, or `+ create`.
+    fn selected(state: &AppState) -> Option<&str> {
+        match &state.selected {
+            Some(Selection::Row(address)) => Some(address),
+            _ => None,
+        }
+    }
+
+    /// `rows`, with `home` an estate a campaign can be created in.
+    fn creating(rows: Vec<Row>) -> AppState {
+        AppState::new(rows).with_estates(BTreeMap::from([(
+            "home".to_string(),
+            "/e/home/campaigns".to_string(),
+        )]))
+    }
+
+    /// On the brief step for `home/quern`, with `brief` typed.
+    fn briefing(brief: &str) -> AppState {
+        typed(
+            update(typed(creating(sample_rows()), "home/quern"), Event::Enter),
+            brief,
+        )
     }
 
     fn plain(view: &View) -> Vec<String> {
@@ -1239,18 +1392,37 @@ mod tests {
             text: " ".to_string(),
             tone: Tone::Fill,
         };
+        // `+ create`, a refusal, and the brief step too.
+        let queries = [
+            "",
+            "h",
+            "日本",
+            "zzz",
+            "❤\u{FE0F}",
+            "👩\u{200D}🔬l",
+            "home/q",
+            "home/Q",
+        ];
+        let mut states: Vec<AppState> = queries
+            .iter()
+            .map(|query| typed(creating(rows.clone()), query))
+            .collect();
+        states.push(typed(
+            update(typed(creating(rows.clone()), "home/q"), Event::Enter),
+            "日本語の❤\u{FE0F}ブリーフ",
+        ));
         for ind in [Indicators::Dots, Indicators::Symbols] {
-            for query in ["", "h", "日本", "zzz", "❤\u{FE0F}", "👩\u{200D}🔬l"] {
-                let state = typed(AppState::new(rows.clone()), query);
+            for state in &states {
                 for width in 0..=90 {
                     for height in [1, 2, 3, 5, 7, 12] {
-                        let v = view(&state, width, height, ind);
+                        let v = view(state, width, height, ind);
                         assert_eq!(v.lines.len(), height);
                         for line in &v.lines {
                             assert_eq!(
                                 line_cells(line),
                                 width,
-                                "{width}x{height} {query:?}: {:?}",
+                                "{width}x{height} {:?}: {:?}",
+                                state.filter,
                                 line.plain()
                             );
                             if width > 0 {
@@ -1669,5 +1841,183 @@ mod tests {
         assert_eq!(view(&state, 40, 5, Indicators::Dots).cursor, Some((6, 0)));
         // No room for any of the query: the cursor holds column 4.
         assert_eq!(view(&state, 5, 5, Indicators::Dots).cursor, Some((4, 0)));
+    }
+
+    #[test]
+    fn create_follows_the_matches_for_an_address_in_a_creatable_estate() {
+        // Hand-transcribed at 64 cells, like the frame above: the match
+        // keeps its row, `+ create` comes after it, and Down reaches it.
+        let rows = vec![live("home/garden", "working"), new_row("home/attic")];
+        let state = update(typed(creating(rows), "home/ga"), Event::Down);
+        let v = view(&state, 64, 7, Indicators::Dots);
+        let pad = |n: usize| " ".repeat(n);
+        assert_eq!(
+            plain(&v),
+            vec![
+                format!("  / home/ga{}1/2 campaigns", pad(39)),
+                format!(" {}", "─".repeat(63)),
+                format!("  ● home/garden{}working", pad(41)),
+                "> + create home/ga".to_string(),
+                String::new(),
+                String::new(),
+                "  filter type · move ↑↓ · open enter · fresh ctrl+f · close esc".to_string(),
+            ]
+        );
+        assert!(v.lines[3].selected);
+        assert_eq!(tone_of(&v.lines[3], "+ create home/ga"), Some(Tone::Text));
+        // With no estates set, the same filter offers nothing.
+        let plain_state = typed(
+            AppState::new(vec![live("home/garden", "working")]),
+            "home/ga",
+        );
+        let v = view(&plain_state, 64, 7, Indicators::Dots);
+        assert!(plain(&v).iter().all(|l| !l.contains("+ create")));
+    }
+
+    #[test]
+    fn the_selection_moves_between_the_matches_and_create() {
+        let mut state = typed(creating(sample_rows()), "home/ga");
+        assert_eq!(selected(&state), Some("home/garden"));
+        state = update(state, Event::Down);
+        assert_eq!(state.selected, Some(Selection::Create));
+        state = update(state, Event::Down);
+        assert_eq!(state.selected, Some(Selection::Create));
+        state = update(state, Event::Up);
+        assert_eq!(selected(&state), Some("home/garden"));
+        // Typing keeps `+ create` while it is still offered...
+        state = typed(update(state, Event::Down), "rd");
+        assert_eq!(state.selected, Some(Selection::Create));
+        // ...an exact match takes it away, and selects the match...
+        state = typed(state, "en");
+        assert_eq!(selected(&state), Some("home/garden"));
+        assert!(!plain(&view(&state, 40, 7, Indicators::Dots))
+            .iter()
+            .any(|l| l.contains("+ create")));
+        // ...with nothing matching, `+ create` is selected...
+        state = typed(state, "x");
+        assert_eq!(state.selected, Some(Selection::Create));
+        // ...and an invalid name leaves nothing to select.
+        state = typed(state, "_");
+        assert_eq!(state.selected, None);
+    }
+
+    #[test]
+    fn enter_or_ctrl_f_on_create_asks_for_a_brief_and_an_empty_one_creates_nothing() {
+        for key in [Event::Enter, Event::Fresh] {
+            let state = update(typed(creating(sample_rows()), "home/quern"), key);
+            assert_eq!(state.brief.as_deref(), Some(""));
+            assert_eq!(state.done, None);
+            // Enter, Enter on a typo, or on blanks: still asking.
+            let state = update(state, Event::Enter);
+            assert_eq!(state.done, None);
+            let state = update(typed(state, "  "), Event::Enter);
+            assert_eq!(state.done, None);
+            assert!(state.brief.is_some());
+            assert_eq!(
+                view(&state, 64, 3, Indicators::Dots).lines[2].plain(),
+                "  type a one-line brief first"
+            );
+        }
+    }
+
+    #[test]
+    fn the_brief_is_one_line_of_at_most_120_characters() {
+        let mut state = briefing(" Grind\t it x");
+        state = update(state, Event::Backspace);
+        // Up, Down and Ctrl-f do nothing here.
+        for event in [Event::Up, Event::Down, Event::Fresh] {
+            state = update(state, event);
+        }
+        assert_eq!(state.done, None);
+        assert_eq!(
+            update(state, Event::Enter).done,
+            Some(Outcome::Create {
+                address: "home/quern".to_string(),
+                brief: "Grind it".to_string(),
+            })
+        );
+        let full = briefing(&"b".repeat(121));
+        assert_eq!(full.brief.as_deref(), Some("b".repeat(120).as_str()));
+    }
+
+    #[test]
+    fn esc_goes_back_with_the_filter_kept_and_ctrl_c_quits_from_either_step() {
+        let briefing = briefing("draft");
+        let back = update(briefing.clone(), Event::Esc);
+        assert_eq!(back.brief, None);
+        assert_eq!(back.done, None);
+        assert_eq!(back.filter, "home/quern");
+        assert_eq!(back.selected, Some(Selection::Create));
+        assert_eq!(
+            update(back.clone(), Event::Esc).done,
+            Some(Outcome::Cancelled)
+        );
+        assert_eq!(update(briefing, Event::Quit).done, Some(Outcome::Cancelled));
+        assert_eq!(update(back, Event::Quit).done, Some(Outcome::Cancelled));
+    }
+
+    #[test]
+    fn the_brief_step_is_the_input_then_where_it_goes_then_the_keys() {
+        let v = view(&briefing("Grind the grain."), 64, 5, Indicators::Dots);
+        assert_eq!(
+            plain(&v),
+            vec![
+                "  brief for home/quern> Grind the grain.",
+                "  in /e/home/campaigns/quern (untracked; not committed)",
+                "  create and start enter · back esc · quit ctrl+c",
+                "",
+                "",
+            ]
+        );
+        assert_eq!(v.cursor, Some((40, 0)));
+        assert_eq!(
+            tone_of(&v.lines[0], "brief for home/quern> "),
+            Some(Tone::Muted)
+        );
+        assert_eq!(tone_of(&v.lines[0], "Grind the grain."), Some(Tone::Text));
+        // One row still shows the input, its end in view: 24 cells of
+        // prompt at width 40 leave 14 before the cursor's cell.
+        let v = view(
+            &briefing("abcdefghijklmnopqrstuvwxyz"),
+            40,
+            1,
+            Indicators::Dots,
+        );
+        assert_eq!(plain(&v), vec!["  brief for home/quern> mnopqrstuvwxyz"]);
+        assert_eq!(v.cursor, Some((38, 0)));
+        // The cursor needs a cell before the trailing one: none at 25.
+        let cursor = |width| view(&briefing("ab"), width, 1, Indicators::Dots).cursor;
+        assert_eq!((cursor(26), cursor(25)), (Some((24, 0)), None));
+        // The keys show until Enter meets an empty brief, and come back
+        // once there is one.
+        let hint = |state: &AppState| view(state, 64, 3, Indicators::Dots).lines[2].plain();
+        let keys = "  create and start enter · back esc · quit ctrl+c";
+        assert_eq!(hint(&briefing("")), keys);
+        let nudged = update(briefing(""), Event::Enter);
+        assert_eq!(hint(&nudged), "  type a one-line brief first");
+        assert_eq!(hint(&typed(nudged, "x")), keys);
+    }
+
+    #[test]
+    fn an_address_that_cannot_be_created_says_why_and_enter_does_nothing() {
+        for (query, reason) in [
+            ("home/Quern", "  can't create: a-z 0-9 and single -"),
+            ("lab/quern", "  no estate 'lab'"),
+        ] {
+            let state = typed(creating(sample_rows()), query);
+            assert_eq!(
+                view(&state, 64, 7, Indicators::Dots).lines[2].plain(),
+                reason
+            );
+            let state = update(state, Event::Enter);
+            assert_eq!((state.brief, state.done), (None, None));
+        }
+        // A bare name never offers create, even in a creatable estate.
+        let state = typed(creating(sample_rows()), "quern");
+        assert_eq!(
+            view(&state, 64, 7, Indicators::Dots).lines[2].plain(),
+            "  no matching campaigns"
+        );
+        assert_eq!(update(state, Event::Enter).brief, None);
     }
 }
