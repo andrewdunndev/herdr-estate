@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.1 - 2026-09-23
+
 - `{address}` in an estate `env` value becomes the campaign's address,
   so one estate row can give each workspace a value naming its campaign.
 
