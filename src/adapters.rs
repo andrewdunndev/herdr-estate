@@ -78,7 +78,7 @@ pub fn build_argv(
         AgentKind::Claude => claude_argv(campaign, verb, conversation_id, prompt_file),
         AgentKind::Other(name) => {
             eprintln!(
-                "herdr-estate: no adapter for agent kind '{name}' — starting with no mapped flags"
+                "herdr-estate: no adapter for agent kind '{name}', starting with no mapped flags"
             );
             vec![name.clone()]
         }

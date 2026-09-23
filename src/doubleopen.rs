@@ -124,7 +124,7 @@ pub fn live_workspace(address: &str) -> Result<Option<Workspace>, EstateError> {
         let mut ids: Vec<&str> = matching.iter().map(|w| w.workspace_id.as_str()).collect();
         ids.sort_unstable();
         return Err(EstateError::Guard(format!(
-            "{address}: {} workspaces already carry this label ({}) — close the extras yourself",
+            "{address}: {} workspaces already carry this label ({}). Close the extras yourself",
             matching.len(),
             ids.join(", ")
         )));

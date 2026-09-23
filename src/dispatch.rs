@@ -94,7 +94,7 @@ pub fn create_and_open(
 ) -> Result<(), EstateError> {
     if let Some(ws) = doubleopen::live_workspace(address)? {
         return Err(EstateError::Guard(format!(
-            "{address}: workspace {} already carries this label — refusing to create a campaign under it",
+            "{address}: workspace {} already carries this label, refusing to create a campaign under it",
             ws.workspace_id
         )));
     }
@@ -106,7 +106,7 @@ pub fn create_and_open(
     };
     open_row(estates, &row).inspect_err(|_| {
         progress::step(&format!(
-            "{address}: campaign created, but starting it failed — it stays as a new row"
+            "{address}: campaign created, but starting it failed. It stays as a new row"
         ));
     })
 }
@@ -590,7 +590,7 @@ mod tests {
         assert!(dir.join("log.md").is_file());
         assert_eq!(
             crate::progress::logged_messages().last().unwrap(),
-            "home/quern: campaign created, but starting it failed — it stays as a new row"
+            "home/quern: campaign created, but starting it failed. It stays as a new row"
         );
     }
 }

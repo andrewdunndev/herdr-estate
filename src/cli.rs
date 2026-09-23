@@ -177,7 +177,7 @@ fn resolve_address(address: Option<String>, dry_run: bool) -> Result<String, Est
     }
     if dry_run {
         return Err(EstateError::Usage(
-            "--dry-run needs an explicit <address> — deriving one from the current workspace would itself call herdr"
+            "--dry-run needs an explicit <address>, deriving one from the current workspace would itself call herdr"
                 .to_string(),
         ));
     }

@@ -166,7 +166,7 @@ pub fn resolve(
     let md = cdir.join("campaign.md");
     if !md.is_file() {
         return Err(EstateError::Config(format!(
-            "no campaign at {} — create {} first",
+            "no campaign at {}. Create {} first",
             cdir.display(),
             md.display()
         )));

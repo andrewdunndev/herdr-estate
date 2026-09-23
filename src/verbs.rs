@@ -101,7 +101,7 @@ pub fn start_args(campaign: &Campaign, pane_id: &str, agent_argv: &[String]) -> 
 pub fn derive_address() -> Result<String, EstateError> {
     let workspace_id = crate::paths::non_empty_env("HERDR_WORKSPACE_ID").ok_or_else(|| {
         EstateError::Usage(
-            "no address given and $HERDR_WORKSPACE_ID is unset — pass one explicitly".to_string(),
+            "no address given and $HERDR_WORKSPACE_ID is unset. Pass one explicitly".to_string(),
         )
     })?;
     let result = herdrcli::call_herdr(
@@ -276,7 +276,7 @@ fn check_live_workspace(address: &str) -> Result<Option<Workspace>, EstateError>
     }
     if !ownership::is_ours(&ws.workspace_id) {
         return Err(EstateError::Guard(format!(
-            "{address}: a workspace with this label exists that herdr-estate did not create — close it yourself"
+            "{address}: a workspace with this label exists that herdr-estate did not create. Close it yourself"
         )));
     }
     Ok(Some(ws))
@@ -311,7 +311,7 @@ fn open_workspace(
             }
             CloseOutcome::NotConfirmed => {
                 return Err(EstateError::Guard(format!(
-                    "{address}: workspace {} could not be confirmed closed — refusing to create a replacement",
+                    "{address}: workspace {} could not be confirmed closed, refusing to create a replacement",
                     ws.workspace_id
                 )));
             }
@@ -388,7 +388,7 @@ fn dry_run_plan(
                 ])
             } else {
                 return Err(EstateError::Guard(format!(
-                    "{address}: workspace {} could not be confirmed closed — refusing to create a replacement",
+                    "{address}: workspace {} could not be confirmed closed, refusing to create a replacement",
                     w.workspace_id
                 )));
             }
@@ -423,7 +423,7 @@ pub(crate) fn resume_with_ids(
     let conversation_id = match conversation_id {
         Some(id) => id,
         None => {
-            println!("{address}: no recorded conversation — resume behaves as fresh");
+            println!("{address}: no recorded conversation: resume behaves as fresh");
             return fresh_with_ids(estates, address, dry_run);
         }
     };
@@ -437,7 +437,7 @@ pub(crate) fn resume_with_ids(
         }
         if let Some(holder) = doubleopen::registry_holder(&conversation_id) {
             return Err(EstateError::Guard(format!(
-                "{address}: conversation is open as {holder} — exit that pane first"
+                "{address}: conversation is open as {holder}. Exit that pane first"
             )));
         }
     }
@@ -491,7 +491,7 @@ pub(crate) fn fresh_with_ids(
         if campaign.kind == AgentKind::Claude {
             if let Some(holder) = doubleopen::registry_holder(old_id) {
                 return Err(EstateError::Guard(format!(
-                    "{address}: conversation is open as {holder} — exit that pane first"
+                    "{address}: conversation is open as {holder}. Exit that pane first"
                 )));
             }
         }
@@ -642,7 +642,7 @@ fn create_with(
     let campaigns = campaign::campaigns_dir(estates, &estate)?;
     if !campaigns.is_dir() {
         return Err(EstateError::Config(format!(
-            "{address}: no campaigns directory at {} — refusing to create one",
+            "{address}: no campaigns directory at {}, refusing to create one",
             campaigns.display()
         )));
     }
@@ -657,7 +657,7 @@ fn create_with(
     let dir = campaigns.join(&name);
     let adopt = || {
         EstateError::Guard(format!(
-            "{} already exists — refusing to adopt it",
+            "{} already exists, refusing to adopt it",
             dir.display()
         ))
     };
@@ -710,25 +710,15 @@ fn create_with(
 /// A new campaign's `log.md`, in the estates' log convention: dated `##`
 /// entries, the tail of the latest being the re-entry pointer.
 fn log_md(name: &str, address: &str, brief: &str, date: &str) -> String {
-    // A commit subject carries no trailing period, whatever the brief ends in.
-    let subject = brief.trim_end_matches('.');
     format!(
-        "# {name} — log
+        "# {name}: log
 
-## {date} — campaign created
+## {date}: campaign created
 
-Created with herdr-estate as `{address}`, with this brief:
-{brief}
+Created as `{address}` with the brief: {brief}
 
-POINTER: CURRENT STATE — campaign.md holds only the brief; nothing else
-exists yet. herdr-estate wrote campaign.md and this log, and neither
-is committed.
-
-NEXT ACTION — agree the scope with the operator and write it into
-campaign.md, then commit campaign.md and log.md by name as
-`campaign({name}): create — {subject}`.
-
-HOLDS: none.
+Next: agree the scope and write it into campaign.md, then commit
+campaign.md and log.md.
 "
     )
 }
@@ -1715,7 +1705,7 @@ mod tests {
         );
         // Whatever today is, the rest of the log is log_md's.
         let log = std::fs::read_to_string(dir.join("log.md")).unwrap();
-        let date = &log["# quern — log\n\n## ".len()..][..10];
+        let date = &log["# quern: log\n\n## ".len()..][..10];
         assert!(is_date(date), "{date:?}");
         assert_eq!(log, log_md("quern", "home/quern", "Grind the grain.", date));
         assert_eq!(names_in(&dir), ["campaign.md", "log.md"]);
@@ -1741,16 +1731,10 @@ mod tests {
     fn log_md_follows_the_estates_log_convention_dated_as_given() {
         assert_eq!(
             log_md("quern", "home/quern", "Grind the grain.", "2026-09-22"),
-            "# quern — log\n\n## 2026-09-22 — campaign created\n\n\
-             Created with herdr-estate as `home/quern`, with this brief:\n\
-             Grind the grain.\n\n\
-             POINTER: CURRENT STATE — campaign.md holds only the brief; nothing else\n\
-             exists yet. herdr-estate wrote campaign.md and this log, and neither\n\
-             is committed.\n\n\
-             NEXT ACTION — agree the scope with the operator and write it into\n\
-             campaign.md, then commit campaign.md and log.md by name as\n\
-             `campaign(quern): create — Grind the grain`.\n\n\
-             HOLDS: none.\n"
+            "# quern: log\n\n## 2026-09-22: campaign created\n\n\
+             Created as `home/quern` with the brief: Grind the grain.\n\n\
+             Next: agree the scope and write it into campaign.md, then commit\n\
+             campaign.md and log.md.\n"
         );
     }
 
@@ -1786,7 +1770,7 @@ mod tests {
         ] {
             let err = create_campaign(&f.estates, address, "b", dry_run).unwrap_err();
             assert!(
-                matches!(&err, EstateError::Guard(m) if m.ends_with("already exists — refusing to adopt it")),
+                matches!(&err, EstateError::Guard(m) if m.ends_with("already exists, refusing to adopt it")),
                 "{err}"
             );
         }
