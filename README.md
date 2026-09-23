@@ -99,8 +99,8 @@ the run log: [docs/events.md](docs/events.md).
 
 `herdr-estate pick`, on the key bound above, opens a popup of every
 campaign, marked live, dormant or new. Type to filter; Enter focuses,
-resumes or starts fresh; Ctrl-f does too, twice stopping an idle or
-done agent; the footer lists its keys.
+resumes or starts fresh; Ctrl-f starts fresh, and on an idle or done
+agent a second press stops it first. The footer lists its keys.
 
 ## Boundaries
 

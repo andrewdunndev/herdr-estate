@@ -4,9 +4,9 @@
 
 - The picker's Ctrl-f now doubles as a stop: on a row whose agent is
   idle or done, a first press arms and a second press on the same row
-  stops it and starts fresh. Working, blocked or any other running
-  status still refuses, and the CLI's `fresh` still refuses a running
-  agent outright.
+  stops it and starts fresh. It refuses a working or blocked agent, a
+  workspace with more than one pane, and a conversation open in a
+  second process. The CLI's `fresh` still refuses a running agent.
 
 ## v0.1.1 - 2026-09-23
 
