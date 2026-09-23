@@ -35,11 +35,11 @@ pub struct ParseError {
     pub message: String,
 }
 
-/// A small hand-rolled parser matching the shape of the Python argparse
-/// setup: one required subcommand (`resume`, `fresh` or `list`), an
-/// optional positional `address` on the two verbs, and `--dry-run` on
-/// those same two. Anything else is a usage error, exit code 2 (the
-/// exit code Python's argparse itself uses on a parse failure).
+/// A small hand-rolled parser: one required subcommand (`resume`,
+/// `fresh`, `list` or `pick`), an optional positional `address` and
+/// `--dry-run` on the two verbs, and `pick`'s render flags. Anything
+/// else is a usage error, exit code 2 (the exit code Python's argparse
+/// uses on a parse failure).
 pub fn parse_args(argv: &[String]) -> Result<Command, ParseError> {
     let verb = argv.first().ok_or_else(|| ParseError {
         message: "the following arguments are required: verb".to_string(),

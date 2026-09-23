@@ -18,8 +18,7 @@ struct GitOutput {
     stdout: String,
 }
 
-/// Run `git -C <repo> <args>` without checking the exit code — the
-/// `check=False` half of the Python source's `_git` helper, for probes
+/// Run `git -C <repo> <args>` without checking the exit code, for probes
 /// where a non-zero exit is an ordinary "no" (a missing ref, an unset
 /// upstream), not a failure.
 fn run_git(repo: &Path, args: &[&str]) -> Result<GitOutput, EstateError> {

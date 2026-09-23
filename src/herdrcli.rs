@@ -32,11 +32,10 @@ pub fn scrub_env(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
 }
 
 /// Raised internally by `call_herdr(check: true)` on a non-zero herdr
-/// exit. A separate type from `EstateError` — matching where Python
-/// defines it, in this same module, distinct from `errors.py`'s four
-/// subclasses — that converts into `EstateError::Protocol` at the point
-/// `call_herdr` returns it, so every caller downstream of the herdr
-/// boundary still deals with the one crate-wide error enum.
+/// exit. A separate type from `EstateError` that converts into
+/// `EstateError::Protocol` at the point `call_herdr` returns it, so every
+/// caller downstream of the herdr boundary still deals with the one
+/// crate-wide error enum.
 #[derive(Debug)]
 pub struct HerdrError {
     pub herdr_args: Vec<String>,

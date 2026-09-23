@@ -42,9 +42,7 @@ use crate::paths::home_dir;
 /// via the `kill` binary rather than a `libc`-crate `kill(2)` wrapper
 /// (the same dependency-free tradeoff `continuity::hostname` makes for
 /// `gethostname(2)`). A "not found" and a "found but owned by someone
-/// else" exit the same way here, matching Python's own tri-except
-/// (`ValueError`, `ProcessLookupError`, `PermissionError` all "not a
-/// holder").
+/// else" exit the same way here: either is "not a holder".
 fn pid_alive(pid: u32) -> bool {
     std::process::Command::new("kill")
         .args(["-0", &pid.to_string()])

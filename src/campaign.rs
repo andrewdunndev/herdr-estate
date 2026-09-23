@@ -70,8 +70,7 @@ fn toml_str_array(row: &toml::Table, key: &str) -> Vec<String> {
 }
 
 /// The estate's or campaign's `paths` list: string entries only, empty
-/// ones dropped — the same filter the Python source applies before
-/// rooting each path against the estate.
+/// ones dropped before each path is rooted against the estate.
 fn non_empty_strings(v: Vec<String>) -> Vec<String> {
     v.into_iter().filter(|s| !s.is_empty()).collect()
 }
