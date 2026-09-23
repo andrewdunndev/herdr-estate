@@ -298,6 +298,42 @@ fn a_failed_workspace_list_refuses_and_never_opens_a_half_true_picker() {
 }
 
 #[test]
+fn inside_herdr_the_popup_is_painted_herdrs_panel_before_the_list_is_read() {
+    // A failed `workspace list` ends the run before the picker opens, so
+    // stdout holds only the paint: vesper's panel, from the file herdr
+    // reads, set and cleared to, then SGR 0 on the way out. A run with
+    // no HERDR_PLUGIN_ID, from a shell, leaves its terminal alone.
+    let painted = "\x1b[48;2;26;26;26m\x1b[38;2;255;255;255m\x1b[2J\x1b[1;1H\x1b[0m";
+    for (plugin_id, want) in [(Some("herdr-estate"), painted), (None, "")] {
+        let (f, root) = fixture();
+        make_campaign(&root, "garden", "---\n---\n");
+        let herdr_config = f.home.join(".config").join("herdr");
+        std::fs::create_dir_all(&herdr_config).unwrap();
+        std::fs::write(
+            herdr_config.join("config.toml"),
+            "[theme]\nname = \"vesper\"\n",
+        )
+        .unwrap();
+        f.fake.set_response(0, "", 1);
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_herdr-estate"));
+        cmd.arg("pick")
+            .env_clear()
+            .env("HOME", &f.home)
+            .env("HERDR_PLUGIN_CONFIG_DIR", &f.config_dir)
+            .env("HERDR_PLUGIN_STATE_DIR", &f.state_dir)
+            .env("HERDR_BIN_PATH", f.fake.bin_path())
+            .env("PATH", "/usr/bin:/bin");
+        if let Some(id) = plugin_id {
+            cmd.env("HERDR_PLUGIN_ID", id);
+        }
+        let out = cmd.output().expect("run the built herdr-estate binary");
+        assert!(!out.status.success(), "{plugin_id:?}");
+        assert_eq!(stdout(&out), want, "{plugin_id:?}");
+        assert!(stderr(&out).contains("herdr-estate:"), "{plugin_id:?}");
+    }
+}
+
+#[test]
 fn pick_rejects_an_unknown_flag() {
     let (f, _root) = fixture();
     let out = run(&f, &["pick", "--nope"]);

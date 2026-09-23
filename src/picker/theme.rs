@@ -1,10 +1,25 @@
+// Portions adapted from herdr v0.9.1 (github.com/herdrdev/herdr, tag
+// 8544776, Apache-2.0, https://www.apache.org/licenses/LICENSE-2.0;
+// Catppuccin palettes MIT): palettes from src/app/state.rs:78-525;
+// canonical() and parse_color() from src/config/theme.rs:25-47,155-219
+// (changed: .get() slicing); resolution from src/app/mod.rs:219-332.
+// herdr's parser: toml 0.8.23. Bump: when herdr's version changes, list
+// the commits since the tag touching state.rs, config/theme.rs,
+// app/mod.rs, client/shell/composition.rs, client/shell/overlays.rs and
+// client/shell.rs (gh api
+// 'repos/herdrdev/herdr/commits?sha=<new tag>&path=<file>&since=<old tag date>').
+// If there are none, bump the tag.
+
 //! herdr's look, copied: the colour tokens the picker paints with and
-//! the status glyph set, chosen from herdr's own config file. herdr
-//! 0.9.1 gives a plugin no theme: no environment variable, socket method
-//! or plugin-context field carries one (#1796 is an open idea; revisit
-//! if it ships). So the palettes are copied from herdr's source
-//! (app/state.rs:78-150), and the choice between them is read from the
-//! file herdr itself reads. Only a fill equal to herdr's resolved
+//! the status glyph set, resolved from herdr's own config file the way
+//! herdr resolves them. herdr 0.9.1 gives a plugin no theme: no
+//! environment variable, socket method or plugin-context field carries
+//! one (#1796 is an open idea; revisit if it ships). So all 18 built-in
+//! palettes are copied from herdr's source, each cut to the 11 tokens
+//! the picker paints, and herdr's resolution is replayed over the file
+//! herdr itself reads: the theme name, `[theme.custom]`, the legacy
+//! `[ui].accent`, and `auto_switch` as herdr resolves it when it can't
+//! tell the terminal's appearance. Only a fill equal to herdr's resolved
 //! `panel_bg` makes the picker and herdr's popup frame one surface.
 
 use std::path::PathBuf;
@@ -28,8 +43,8 @@ pub struct Palette {
     pub surface1: Color,
     /// The selection bar; herdr's popup border is drawn in it too.
     pub accent: Color,
-    /// Text on the selection bar.
-    pub contrast: Color,
+    /// Text on the selection bar when `panel_bg` names no colour.
+    pub surface_dim: Color,
     /// Status: working.
     pub yellow: Color,
     /// Status: blocked.
@@ -40,51 +55,89 @@ pub struct Palette {
     pub green: Color,
 }
 
-/// herdr's `contrast()` (overlays.rs:296-301): text on the accent bar
-/// is `panel_bg`, or `surface_dim` when `panel_bg` is the terminal's
-/// own background and so names no colour.
-fn contrast(panel_bg: Color, surface_dim: Color) -> Color {
-    match panel_bg {
-        Color::Reset => surface_dim,
-        c => c,
+/// Each RGB built-in theme by canonical name, its tokens in `Palette`'s
+/// field order: panel_bg, text, subtext0, overlay0, surface1, accent,
+/// surface_dim, yellow, red, teal, green (app/state.rs:78-525). Generated
+/// from a table checked against herdr's source, never typed by hand.
+/// `terminal`, the one theme of ANSI names, is `Palette::terminal`.
+#[rustfmt::skip]
+const THEMES: [(&str, [u32; 11]); 17] = [
+    ("catppuccin", [0x181825, 0xcdd6f4, 0xa6adc8, 0x6c7086, 0x45475a, 0x89b4fa, 0x1e1e2e, 0xf9e2af, 0xf38ba8, 0x94e2d5, 0xa6e3a1]),
+    ("catppuccin-latte", [0xeff1f5, 0x4c4f69, 0x6c6f85, 0x9ca0b0, 0xbcc0cc, 0x1e66f5, 0xe6e9ef, 0xdf8e1d, 0xd20f39, 0x179299, 0x40a02b]),
+    ("tokyo-night", [0x1a1b26, 0xc0caf5, 0xa9b1d6, 0x565f89, 0x414868, 0x7aa2f7, 0x1a1b26, 0xe0af68, 0xf7768e, 0x7dcfff, 0x9ece6a]),
+    ("tokyo-night-day", [0xe1e2e7, 0x3760bf, 0x6172b0, 0x8990b3, 0xa8aecb, 0x2e7de9, 0xd2d3da, 0x8c6c3e, 0xf52a65, 0x118c74, 0x587539]),
+    ("dracula", [0x282a36, 0xf8f8f2, 0xd2d2dc, 0x6272a4, 0x6272a4, 0xbd93f9, 0x282a36, 0xf1fa8c, 0xff5555, 0x8be9fd, 0x50fa7b]),
+    ("nord", [0x2e3440, 0xeceff4, 0xd8dee9, 0x4c566a, 0x434c5e, 0x88c0d0, 0x2e3440, 0xebcb8b, 0xbf616a, 0x8fbcbb, 0xa3be8c]),
+    ("gruvbox", [0x282828, 0xebdbb2, 0xd5c4a1, 0x928374, 0x504945, 0xd79921, 0x282828, 0xfabd2f, 0xfb4934, 0x8ec07c, 0xb8bb26]),
+    ("gruvbox-light", [0xfbf1c7, 0x3c3836, 0x504945, 0x928374, 0xd5c4a1, 0x076678, 0xf2e5bc, 0xb57614, 0x9d0006, 0x427b58, 0x79740e]),
+    ("one-dark", [0x282c34, 0xabb2bf, 0x969ca8, 0x5c6370, 0x3e4451, 0x61afef, 0x282c34, 0xe5c07b, 0xe06c75, 0x56b6c2, 0x98c379]),
+    ("one-light", [0xfafafa, 0x383a42, 0x686b77, 0xa0a1a7, 0xe5e5e6, 0x4078f2, 0xf5f5f6, 0xc18401, 0xe45649, 0x0184bc, 0x50a14f]),
+    ("solarized", [0x002b36, 0x93a1a1, 0x839496, 0x586e75, 0x586e75, 0x268bd2, 0x002b36, 0xb58900, 0xdc322f, 0x2aa198, 0x859900]),
+    ("solarized-light", [0xfdf6e3, 0x657b83, 0x839496, 0x93a1a1, 0x93a1a1, 0x268bd2, 0xeee8d5, 0xb58900, 0xdc322f, 0x2aa198, 0x859900]),
+    ("kanagawa", [0x1f1f28, 0xdcd7ba, 0xc8c3aa, 0x727169, 0x363646, 0x7e9cd8, 0x1f1f28, 0xc0a36e, 0xc34043, 0x7fb4ca, 0x76946a]),
+    ("kanagawa-lotus", [0xf2ecbc, 0x545464, 0x43436c, 0xa09cac, 0xc9cbd1, 0x4d699b, 0xd5cea3, 0x77713f, 0xc84053, 0x4e8ca2, 0x6f894e]),
+    ("rose-pine", [0x191724, 0xe0def4, 0xc8c5dc, 0x6e6a86, 0x26233a, 0xc4a7e7, 0x26233a, 0xf6c177, 0xeb6f92, 0x9ccfd8, 0x31748f]),
+    ("rose-pine-dawn", [0xfaf4ed, 0x464261, 0x797593, 0x9893a5, 0xfffaf3, 0x907aa9, 0xf2e9e1, 0xea9d34, 0xb4637a, 0x56949f, 0x286983]),
+    ("vesper", [0x1a1a1a, 0xffffff, 0xa0a0a0, 0x5c5c5c, 0x282828, 0xffc799, 0x101010, 0xffc799, 0xff8080, 0x66ddcc, 0x99ffe4]),
+];
+
+/// `0xrrggbb` as a colour.
+const fn rgb(x: u32) -> Color {
+    Color::Rgb((x >> 16) as u8, (x >> 8) as u8, x as u8)
+}
+
+/// A `THEMES` row as a palette.
+fn from_row(row: [u32; 11]) -> Palette {
+    let [panel_bg, text, subtext0, overlay0, surface1, accent, surface_dim, yellow, red, teal, green] =
+        row.map(rgb);
+    Palette {
+        panel_bg,
+        text,
+        subtext0,
+        overlay0,
+        surface1,
+        accent,
+        surface_dim,
+        yellow,
+        red,
+        teal,
+        green,
     }
 }
 
 impl Palette {
-    /// Catppuccin Mocha, herdr's default theme (app/state.rs:78-100).
+    /// Catppuccin Mocha, herdr's default theme and its fallback for a
+    /// name it doesn't know: the table's first row.
     pub fn catppuccin() -> Self {
-        let panel_bg = Color::Rgb(24, 24, 37);
-        Palette {
-            panel_bg,
-            text: Color::Rgb(205, 214, 244),
-            subtext0: Color::Rgb(166, 173, 200),
-            overlay0: Color::Rgb(108, 112, 134),
-            surface1: Color::Rgb(69, 71, 90),
-            accent: Color::Rgb(137, 180, 250),
-            contrast: contrast(panel_bg, Color::Rgb(30, 30, 46)),
-            yellow: Color::Rgb(249, 226, 175),
-            red: Color::Rgb(243, 139, 168),
-            teal: Color::Rgb(148, 226, 213),
-            green: Color::Rgb(166, 227, 161),
-        }
+        from_row(THEMES[0].1)
     }
 
     /// herdr's 16-colour `terminal` theme (app/state.rs:128-150), which
     /// follows whatever palette the terminal itself has.
     pub fn terminal() -> Self {
-        let panel_bg = Color::Reset;
         Palette {
-            panel_bg,
+            panel_bg: Color::Reset,
             text: Color::Reset,
             subtext0: Color::Gray,
             overlay0: Color::Gray,
             surface1: Color::DarkGray,
             accent: Color::Blue,
-            contrast: contrast(panel_bg, Color::DarkGray),
+            surface_dim: Color::DarkGray,
             yellow: Color::Yellow,
             red: Color::LightRed,
             teal: Color::Cyan,
             green: Color::Green,
+        }
+    }
+
+    /// herdr's `contrast()` (overlays.rs:296-301): text on the accent bar
+    /// is `panel_bg`, or `surface_dim` when `panel_bg` is the terminal's
+    /// own background and so names no colour. A method, not a stored
+    /// token, so it follows a `[theme.custom]` override of either.
+    pub fn contrast(&self) -> Color {
+        match self.panel_bg {
+            Color::Reset => self.surface_dim,
+            c => c,
         }
     }
 
@@ -96,6 +149,32 @@ impl Palette {
             Status::Done => self.teal,
             Status::Idle => self.green,
             Status::Unknown => self.overlay0,
+        }
+    }
+
+    /// Set each painted token `t` gives a string to that string's colour,
+    /// as herdr's `with_overrides` and `with_mode_overrides` do
+    /// (app/state.rs:553-675). Everything else in `t` is ignored: herdr's
+    /// other 8 tokens, sub-tables, typos, and a value that isn't a string
+    /// (which at startup makes herdr drop its whole config instead).
+    fn apply(&mut self, t: &toml::Table) {
+        let tokens = [
+            ("panel_bg", &mut self.panel_bg),
+            ("text", &mut self.text),
+            ("subtext0", &mut self.subtext0),
+            ("overlay0", &mut self.overlay0),
+            ("surface1", &mut self.surface1),
+            ("accent", &mut self.accent),
+            ("surface_dim", &mut self.surface_dim),
+            ("yellow", &mut self.yellow),
+            ("red", &mut self.red),
+            ("teal", &mut self.teal),
+            ("green", &mut self.green),
+        ];
+        for (key, token) in tokens {
+            if let Some(value) = t.get(key).and_then(toml::Value::as_str) {
+                *token = parse_color(value);
+            }
         }
     }
 }
@@ -128,40 +207,155 @@ fn canonical(name: &str) -> Option<&'static str> {
     }
 }
 
-/// The palette and glyph set a parsed herdr config gives the picker.
-/// Catppuccin when herdr would show catppuccin: no config, no theme
-/// name, a name that canonicalizes to catppuccin, or one herdr doesn't
-/// know (herdr falls back to catppuccin for those, app/mod.rs:280-287).
-/// Anything else herdr would draw differently, and the picker copies
-/// only these two palettes, so it takes the terminal one there: any
-/// other theme, `auto_switch`, a `[theme.custom*]` override, or the
-/// legacy `[ui].accent` override (app/mod.rs:262-270). That is a
-/// legible fallback, not a match: under an RGB theme other than
-/// catppuccin, herdr's frame and the picker's fill still differ.
-pub fn resolve(cfg: Option<&toml::Table>) -> (Palette, Indicators) {
-    let section = |name: &str| {
-        cfg.and_then(|c| c.get(name))
-            .and_then(toml::Value::as_table)
-    };
-    let theme = section("theme");
-    let ui = section("ui");
-    let theme_str = |key: &str| theme.and_then(|t| t.get(key)).and_then(toml::Value::as_str);
-    let ui_str = |key: &str| ui.and_then(|u| u.get(key)).and_then(toml::Value::as_str);
+/// The built-in theme a name picks under any spelling herdr accepts
+/// (`Palette::from_name`, app/state.rs:528-550). `None` for a name herdr
+/// doesn't know.
+fn builtin(name: &str) -> Option<Palette> {
+    match canonical(name)? {
+        "terminal" => Some(Palette::terminal()),
+        c => THEMES
+            .iter()
+            .find(|(n, _)| *n == c)
+            .map(|(_, row)| from_row(*row)),
+    }
+}
 
-    let other_theme = theme_str("name")
-        .and_then(canonical)
-        .is_some_and(|name| name != "catppuccin");
-    let auto_switch = theme
-        .and_then(|t| t.get("auto_switch"))
-        .and_then(toml::Value::as_bool)
-        == Some(true);
-    let custom = theme.is_some_and(|t| t.keys().any(|k| k.starts_with("custom")));
-    let legacy_accent = ui_str("accent").is_some_and(|accent| accent != "cyan");
-    let palette = if other_theme || auto_switch || custom || legacy_accent {
-        Palette::terminal()
+/// A colour string as herdr parses it (`parse_color`,
+/// config/theme.rs:155-219), making herdr's own calls so its quirks
+/// carry over: trimmed and lowercased; reset, default, none and
+/// transparent are the terminal's own colour; `#rrggbb` and `#rgb` by
+/// byte length through `u8::from_str_radix`, which takes a leading '+';
+/// `rgb(r, g, b)`; the 16 ANSI names plus purple, grey and darkgrey;
+/// anything else cyan. The one change: `get` where herdr slices, so a
+/// character split at a slice boundary gives cyan where herdr panics.
+fn parse_color(s: &str) -> Color {
+    let s = s.trim().to_lowercase();
+
+    if matches!(s.as_str(), "reset" | "default" | "none" | "transparent") {
+        return Color::Reset;
+    }
+
+    if let Some(hex) = s.strip_prefix('#') {
+        if hex.len() == 6 {
+            let byte = |i: usize| {
+                hex.get(i..i + 2)
+                    .and_then(|h| u8::from_str_radix(h, 16).ok())
+            };
+            if let (Some(r), Some(g), Some(b)) = (byte(0), byte(2), byte(4)) {
+                return Color::Rgb(r, g, b);
+            }
+        } else if hex.len() == 3 {
+            let chars: Vec<u8> = hex
+                .chars()
+                .filter_map(|c| u8::from_str_radix(&c.to_string(), 16).ok())
+                .collect();
+            if chars.len() == 3 {
+                return Color::Rgb(chars[0] * 17, chars[1] * 17, chars[2] * 17);
+            }
+        }
+    }
+
+    if let Some(inner) = s.strip_prefix("rgb(").and_then(|s| s.strip_suffix(')')) {
+        let parts: Vec<&str> = inner.split(',').collect();
+        if parts.len() == 3 {
+            if let (Ok(r), Ok(g), Ok(b)) = (
+                parts[0].trim().parse::<u8>(),
+                parts[1].trim().parse::<u8>(),
+                parts[2].trim().parse::<u8>(),
+            ) {
+                return Color::Rgb(r, g, b);
+            }
+        }
+    }
+
+    match s.as_str() {
+        "black" => Color::Black,
+        "red" => Color::Red,
+        "green" => Color::Green,
+        "yellow" => Color::Yellow,
+        "blue" => Color::Blue,
+        "magenta" | "purple" => Color::Magenta,
+        // The fallback's colour too, so a mutant deleting this arm
+        // survives; kept so the arms match herdr's one for one.
+        "cyan" => Color::Cyan,
+        "white" => Color::White,
+        "gray" | "grey" => Color::Gray,
+        "darkgray" | "darkgrey" => Color::DarkGray,
+        "lightred" => Color::LightRed,
+        "lightgreen" => Color::LightGreen,
+        "lightyellow" => Color::LightYellow,
+        "lightblue" => Color::LightBlue,
+        "lightmagenta" => Color::LightMagenta,
+        "lightcyan" => Color::LightCyan,
+        _ => Color::Cyan,
+    }
+}
+
+/// herdr's light/dark theme pairs, dark first (`sibling_theme_names`,
+/// app/mod.rs:219-244).
+const SIBLINGS: [(&str, &str); 7] = [
+    ("catppuccin", "catppuccin-latte"),
+    ("tokyo-night", "tokyo-night-day"),
+    ("gruvbox", "gruvbox-light"),
+    ("one-dark", "one-light"),
+    ("solarized", "solarized-light"),
+    ("kanagawa", "kanagawa-lotus"),
+    ("rose-pine", "rose-pine-dawn"),
+];
+
+/// The theme `auto_switch` shows on a dark terminal with no `dark_name`
+/// set: for the light half of a pair, under any spelling herdr accepts,
+/// its dark half; for any other name, the name itself, which already
+/// names a dark half or a theme with no pair.
+fn dark_partner(name: &str) -> &str {
+    let c = canonical(name);
+    SIBLINGS
+        .iter()
+        .find(|(_, light)| c == Some(*light))
+        .map_or(name, |(dark, _)| dark)
+}
+
+/// The palette and glyph set a parsed herdr config gives the picker,
+/// resolved as herdr resolves them (app/mod.rs:246-332). The theme is
+/// `[theme].name` (catppuccin when unset); with `auto_switch` on it is
+/// `dark_name`, else that name's dark partner, since the picker can't
+/// yet ask the terminal its appearance and herdr takes an unknown one as
+/// dark. Then, in herdr's order: the built-in theme (catppuccin for a
+/// name herdr doesn't know), `[theme.custom]`, the legacy `[ui].accent`
+/// unless it is "cyan" or `[theme.custom]` sets an accent, and, under
+/// `auto_switch`, `[theme.custom.dark]`. A value of the wrong type is
+/// skipped here, where herdr would drop its whole config at startup.
+pub fn resolve(cfg: Option<&toml::Table>) -> (Palette, Indicators) {
+    fn get<'a>(t: Option<&'a toml::Table>, key: &str) -> Option<&'a toml::Value> {
+        t?.get(key)
+    }
+    let theme = get(cfg, "theme").and_then(toml::Value::as_table);
+    let ui = get(cfg, "ui").and_then(toml::Value::as_table);
+    let theme_str = |key: &str| get(theme, key).and_then(toml::Value::as_str);
+    let ui_str = |key: &str| get(ui, key).and_then(toml::Value::as_str);
+    let custom = get(theme, "custom").and_then(toml::Value::as_table);
+
+    let manual = theme_str("name").unwrap_or("catppuccin");
+    let (name, mode) = if get(theme, "auto_switch").and_then(toml::Value::as_bool) == Some(true) {
+        (
+            theme_str("dark_name").unwrap_or_else(|| dark_partner(manual)),
+            get(custom, "dark").and_then(toml::Value::as_table),
+        )
     } else {
-        Palette::catppuccin()
+        (manual, None)
     };
+
+    let mut palette = builtin(name).unwrap_or_else(Palette::catppuccin);
+    if let Some(custom) = custom {
+        palette.apply(custom);
+    }
+    let custom_accent = get(custom, "accent").and_then(toml::Value::as_str);
+    if let Some(accent) = ui_str("accent").filter(|a| *a != "cyan" && custom_accent.is_none()) {
+        palette.accent = parse_color(accent);
+    }
+    if let Some(mode) = mode {
+        palette.apply(mode);
+    }
 
     let indicators = match ui_str("status_indicators") {
         Some("symbols") => Indicators::Symbols,
@@ -224,8 +418,9 @@ mod tests {
         assert_eq!(c.overlay0, Color::Rgb(0x6c, 0x70, 0x86));
         assert_eq!(c.surface1, Color::Rgb(0x45, 0x47, 0x5a));
         assert_eq!(c.accent, Color::Rgb(0x89, 0xb4, 0xfa));
+        assert_eq!(c.surface_dim, Color::Rgb(0x1e, 0x1e, 0x2e));
         // panel_bg names a colour, so the bar's text is panel_bg.
-        assert_eq!(c.contrast, Color::Rgb(0x18, 0x18, 0x25));
+        assert_eq!(c.contrast(), Color::Rgb(0x18, 0x18, 0x25));
         assert_eq!(c.yellow, Color::Rgb(0xf9, 0xe2, 0xaf));
         assert_eq!(c.red, Color::Rgb(0xf3, 0x8b, 0xa8));
         assert_eq!(c.teal, Color::Rgb(0x94, 0xe2, 0xd5));
@@ -238,12 +433,57 @@ mod tests {
         assert_eq!(t.overlay0, Color::Gray);
         assert_eq!(t.surface1, Color::DarkGray);
         assert_eq!(t.accent, Color::Blue);
+        assert_eq!(t.surface_dim, Color::DarkGray);
         // panel_bg is Reset, so the bar's text falls to surface_dim.
-        assert_eq!(t.contrast, Color::DarkGray);
+        assert_eq!(t.contrast(), Color::DarkGray);
         assert_eq!(t.yellow, Color::Yellow);
         assert_eq!(t.red, Color::LightRed);
         assert_eq!(t.teal, Color::Cyan);
         assert_eq!(t.green, Color::Green);
+    }
+
+    #[test]
+    fn vesper_and_latte_are_herdrs_tokens() {
+        // Spelled as herdr's source spells them (app/state.rs:503-525,
+        // 103-125), generated from its token dump rather than from the
+        // table, so a row typed wrong fails here. vesper is the
+        // operator's theme.
+        let vesper = builtin("vesper").unwrap();
+        assert_eq!(
+            vesper,
+            Palette {
+                panel_bg: Color::Rgb(26, 26, 26),
+                text: Color::Rgb(255, 255, 255),
+                subtext0: Color::Rgb(160, 160, 160),
+                overlay0: Color::Rgb(92, 92, 92),
+                surface1: Color::Rgb(40, 40, 40),
+                accent: Color::Rgb(255, 199, 153),
+                surface_dim: Color::Rgb(16, 16, 16),
+                yellow: Color::Rgb(255, 199, 153),
+                red: Color::Rgb(255, 128, 128),
+                teal: Color::Rgb(102, 221, 204),
+                green: Color::Rgb(153, 255, 228),
+            }
+        );
+        assert_eq!(vesper.contrast(), Color::Rgb(26, 26, 26));
+        let latte = builtin("catppuccin-latte").unwrap();
+        assert_eq!(
+            latte,
+            Palette {
+                panel_bg: Color::Rgb(239, 241, 245),
+                text: Color::Rgb(76, 79, 105),
+                subtext0: Color::Rgb(108, 111, 133),
+                overlay0: Color::Rgb(156, 160, 176),
+                surface1: Color::Rgb(188, 192, 204),
+                accent: Color::Rgb(30, 102, 245),
+                surface_dim: Color::Rgb(230, 233, 239),
+                yellow: Color::Rgb(223, 142, 29),
+                red: Color::Rgb(210, 15, 57),
+                teal: Color::Rgb(23, 146, 153),
+                green: Color::Rgb(64, 160, 43),
+            }
+        );
+        assert_eq!(latte.contrast(), Color::Rgb(239, 241, 245));
     }
 
     #[test]
@@ -292,11 +532,16 @@ mod tests {
             ("dawn", "rose-pine-dawn"),
             ("vesper", "vesper"),
         ];
+        // Every spelling also resolves to a built-in palette: the table
+        // has a row, under its canonical name, for each theme canonical()
+        // can name, so no name list needs testing apart from this one.
         for (name, want) in table {
             assert_eq!(canonical(name), Some(want), "{name:?}");
+            assert!(builtin(name).is_some(), "{name:?}");
         }
         for name in ["nrod", "", "catppuccin mocha latte"] {
             assert_eq!(canonical(name), None, "{name:?}");
+            assert_eq!(builtin(name), None, "{name:?}");
         }
     }
 
@@ -316,23 +561,153 @@ mod tests {
             "[theme]\nauto_switch = false\n",
             // cyan is the legacy accent's default: no override.
             "[ui]\naccent = \"cyan\"\n",
+            // Nothing painted to override: an empty table, a table
+            // herdr doesn't read, herdr's other tokens, a typo, a value
+            // that isn't a string, and a mode table without auto_switch.
+            "[theme.custom]\n",
+            "[theme.custom_x]\naccent = \"#f5c2e7\"\n",
+            "[theme.custom]\nblue = \"#f5c2e7\"\nacent = \"#f5c2e7\"\ntext = 5\n",
+            "[theme.custom.dark]\naccent = \"#f5c2e7\"\n",
         ] {
             assert_eq!(palette_for(text), Palette::catppuccin(), "{text:?}");
         }
     }
 
     #[test]
-    fn resolve_falls_back_to_the_terminal_palette_for_any_other_look() {
-        for text in [
-            "[theme]\nname = \"Terminal\"\n",
-            "[theme]\nname = \"nord\"\n",
-            "[theme]\nauto_switch = true\n",
-            "[theme.custom]\naccent = \"#f5c2e7\"\n",
-            "[theme.custom.dark]\naccent = \"#f5c2e7\"\n",
-            "[ui]\naccent = \"magenta\"\n",
-        ] {
-            assert_eq!(palette_for(text), Palette::terminal(), "{text:?}");
+    fn parse_color_reads_what_herdr_reads_quirks_included() {
+        assert_eq!(parse_color("#FFF"), Color::Rgb(255, 255, 255));
+        assert_eq!(parse_color("#0a0B0c"), Color::Rgb(10, 11, 12));
+        assert_eq!(parse_color("rgb(1, 2, 3)"), Color::Rgb(1, 2, 3));
+        for reset in [" Transparent ", "reset", "default", "none"] {
+            assert_eq!(parse_color(reset), Color::Reset, "{reset:?}");
         }
+        for (name, want) in [
+            ("black", Color::Black),
+            ("red", Color::Red),
+            ("green", Color::Green),
+            ("yellow", Color::Yellow),
+            ("blue", Color::Blue),
+            ("magenta", Color::Magenta),
+            ("purple", Color::Magenta),
+            ("cyan", Color::Cyan),
+            ("white", Color::White),
+            ("gray", Color::Gray),
+            ("grey", Color::Gray),
+            ("darkgray", Color::DarkGray),
+            ("darkgrey", Color::DarkGray),
+            ("lightred", Color::LightRed),
+            ("lightgreen", Color::LightGreen),
+            ("lightyellow", Color::LightYellow),
+            ("lightblue", Color::LightBlue),
+            ("lightmagenta", Color::LightMagenta),
+            ("lightcyan", Color::LightCyan),
+        ] {
+            assert_eq!(parse_color(name), want, "{name:?}");
+        }
+        // u8::from_str_radix takes a leading '+', so herdr reads this.
+        assert_eq!(parse_color("#+f+f+f"), Color::Rgb(15, 15, 15));
+        // Anything else is cyan: no indexed colours, a bad digit, the
+        // wrong count, a byte out of range, and six bytes whose first
+        // slice splits the 'é', where herdr itself panics.
+        for bad in [
+            "color5",
+            "5",
+            "#ffg",
+            "#fffffg",
+            "rgb(1, 2)",
+            "rgb(1, 2, 256)",
+            "#aéaé",
+        ] {
+            assert_eq!(parse_color(bad), Color::Cyan, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn theme_custom_overrides_the_base_theme_token_by_token() {
+        let mut want = builtin("nord").unwrap();
+        want.accent = Color::Rgb(0xf5, 0xc2, 0xe7);
+        assert_eq!(
+            palette_for("[theme]\nname = \"nord\"\n[theme.custom]\naccent = \"#f5c2e7\"\n"),
+            want
+        );
+        // Each of the 11 keys, in table order, lands on its own token:
+        // the nth is #0000nn, as a table row of 1..=11 would be (the
+        // goldens hold from_row to herdr's field order).
+        let keys =
+            "panel_bg text subtext0 overlay0 surface1 accent surface_dim yellow red teal green";
+        let mut text = String::from("[theme]\nname = \"nord\"\n[theme.custom]\n");
+        for (i, key) in keys.split(' ').enumerate() {
+            text += &format!("{key} = \"#0000{:02x}\"\n", i + 1);
+        }
+        assert_eq!(
+            palette_for(&text),
+            from_row([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+        );
+    }
+
+    #[test]
+    fn a_transparent_custom_panel_puts_surface_dim_under_the_bar_text() {
+        let p =
+            palette_for("[theme]\nname = \"vesper\"\n[theme.custom]\npanel_bg = \"transparent\"\n");
+        assert_eq!(p.panel_bg, Color::Reset);
+        assert_eq!(p.contrast(), Color::Rgb(0x10, 0x10, 0x10));
+    }
+
+    #[test]
+    fn the_legacy_ui_accent_applies_where_herdr_applies_it() {
+        let accent = |text: &str| palette_for(text).accent;
+        assert_eq!(accent("[ui]\naccent = \"magenta\"\n"), Color::Magenta);
+        // herdr's test against its default is case-sensitive.
+        assert_eq!(accent("[ui]\naccent = \"Cyan\"\n"), Color::Cyan);
+        // A [theme.custom] accent turns it off.
+        assert_eq!(
+            accent("[theme.custom]\naccent = \"#010203\"\n[ui]\naccent = \"magenta\"\n"),
+            Color::Rgb(1, 2, 3)
+        );
+    }
+
+    #[test]
+    fn auto_switch_shows_the_theme_herdr_shows_on_an_appearance_it_cant_tell() {
+        let auto = |rest: &str| palette_for(&format!("[theme]\nauto_switch = true\n{rest}"));
+        let theme = |name: &str| builtin(name).unwrap();
+        // Without auto_switch, the light theme named...
+        assert_eq!(
+            palette_for("[theme]\nname = \"tokyo-night-day\"\n"),
+            theme("tokyo-night-day")
+        );
+        // ...with it, herdr takes the terminal as dark: the pair's dark
+        // half...
+        assert_eq!(auto("name = \"tokyo-night-day\"\n"), theme("tokyo-night"));
+        // ...unless dark_name names a theme, known or not.
+        assert_eq!(
+            auto("name = \"tokyo-night-day\"\ndark_name = \"nord\"\n"),
+            theme("nord")
+        );
+        assert_eq!(
+            auto("name = \"tokyo-night-day\"\ndark_name = \"nrod\"\n"),
+            Palette::catppuccin()
+        );
+        // A theme with no pair is its own dark half.
+        assert_eq!(auto("name = \"vesper\"\n"), theme("vesper"));
+    }
+
+    #[test]
+    fn under_auto_switch_theme_custom_dark_lands_last() {
+        // Over [theme.custom]...
+        let p = palette_for(
+            "[theme]\nauto_switch = true\n\
+             [theme.custom]\ntext = \"#010101\"\naccent = \"#020202\"\n\
+             [theme.custom.dark]\naccent = \"#030303\"\n",
+        );
+        assert_eq!(p.text, Color::Rgb(1, 1, 1));
+        assert_eq!(p.accent, Color::Rgb(3, 3, 3));
+        // ...and over the legacy accent.
+        let p = palette_for(
+            "[theme]\nauto_switch = true\n\
+             [theme.custom.dark]\naccent = \"#030303\"\n\
+             [ui]\naccent = \"magenta\"\n",
+        );
+        assert_eq!(p.accent, Color::Rgb(3, 3, 3));
     }
 
     #[test]
@@ -347,7 +722,7 @@ mod tests {
             Indicators::Dots
         );
         assert_eq!(ind("[ui]\n"), Indicators::Dots);
-        // The operator's own config: no [theme], symbols.
+        // Symbols with no [theme]: herdr's default palette.
         assert_eq!(
             resolve(Some(&parse("[ui]\nstatus_indicators = \"symbols\"\n"))),
             (Palette::catppuccin(), Indicators::Symbols)
@@ -446,7 +821,7 @@ mod tests {
         )
         .unwrap();
         let _g = EnvGuard::set(&[("HERDR_CONFIG_PATH", path.to_str().unwrap())]);
-        assert_eq!(load(), (Palette::terminal(), Indicators::Symbols));
+        assert_eq!(load(), (builtin("nord").unwrap(), Indicators::Symbols));
     }
 
     #[test]

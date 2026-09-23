@@ -140,8 +140,8 @@ workspace, first resuming a dormant campaign or starting a new one
 fresh. It re-reads the workspace and goes through the same verbs and
 guards as the CLI. A filter `estate/name` naming no campaign offers
 `+ create`: Enter, a one-line brief, and Enter again create it and
-start it fresh. Glyphs follow herdr's config; a non-default theme
-gets terminal colours.
+start it fresh. Colours and glyphs follow herdr's config, though
+`auto_switch` always shows the dark theme.
 
 It opens as a popup from the key bound above, or by hand:
 

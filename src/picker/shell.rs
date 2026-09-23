@@ -11,10 +11,14 @@ use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
+use crossterm::cursor::MoveTo;
 use crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event as TermEvent, KeyCode, KeyEvent,
     KeyEventKind, KeyModifiers,
 };
+use crossterm::style::{SetBackgroundColor, SetForegroundColor};
+use crossterm::terminal::{Clear, ClearType};
+use ratatui::backend::IntoCrossterm;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
@@ -104,19 +108,19 @@ pub fn open_popup() -> Result<i32, EstateError> {
 /// Build the row list, then either print one static frame
 /// (`render_once`) or run the interactive picker and dispatch whatever
 /// it selected. A `build_rows` failure (herdr unreachable, `workspace
-/// list` malformed) is returned before any terminal is touched: the
-/// picker never opens a half-true list.
+/// list` malformed) is returned before the picker opens: it never opens
+/// a half-true list. Inside herdr the popup's screen is painted herdr's
+/// panel first (`Panel`), so the wait for that list shows no ring.
 pub fn run(
     estates: &toml::Table,
     render_once: bool,
     width: usize,
     height: usize,
 ) -> Result<i32, EstateError> {
-    let built_rows = rows::build_rows(estates)?;
-
     if render_once {
         // Plain text has no colours, but it shows the same glyphs the
         // popup would.
+        let built_rows = rows::build_rows(estates)?;
         let (_, ind) = theme::load();
         let state = AppState::new(built_rows);
         for line in core::view(&state, width, height, ind).lines {
@@ -125,25 +129,88 @@ pub fn run(
         return Ok(0);
     }
 
-    // Dispatch runs on the restored terminal, so its progress lines show
-    // in the popup while `agent start` waits. A failure is held on
-    // screen: the popup closes the moment this process exits, and an
-    // error returned straight to `cli::run` would print into a pane that
-    // is already gone.
+    // herdr's look, read once as the popup opens (a theme changed while
+    // it is open shows the next time it opens).
+    let look = theme::load();
+    let panel = Panel::new(look.0);
+    let built_rows = rows::build_rows(estates)?;
+
     let state = AppState::new(built_rows).with_estates(creatable_estates(estates));
-    let dispatched = match run_interactive(state)? {
-        Outcome::Cancelled => return Ok(0),
-        Outcome::Selected(row) => dispatch::open_row(estates, &row),
-        Outcome::Fresh(row) => dispatch::fresh_row(estates, &row),
-        Outcome::Create { address, brief } => dispatch::create_and_open(estates, &address, &brief),
-    };
-    match dispatched {
+    let outcome = run_interactive(state, look)?;
+    // A failure is held on screen: the popup closes the moment this
+    // process exits, and an error returned straight to `cli::run` would
+    // print into a pane that is already gone.
+    match dispatch_outcome(estates, outcome, panel.0.as_ref(), &mut std::io::stdout()) {
         Ok(()) => Ok(0),
         Err(e) => Ok(report_and_hold(
             &e,
             &mut CrosstermEvents,
             &CROSSTERM_RAW_MODE,
         )),
+    }
+}
+
+/// Dispatch what the picker chose on the restored terminal, so its
+/// progress lines show in the popup while `agent start` waits. ratatui's
+/// restore went back to the main screen, where those lines show, so
+/// inside herdr (`panel`) it is painted onto `out` again first. A cancel
+/// exits next, so its paint never shows.
+fn dispatch_outcome(
+    estates: &toml::Table,
+    outcome: Outcome,
+    panel: Option<&Palette>,
+    out: &mut impl Write,
+) -> Result<(), EstateError> {
+    if let Some(p) = panel {
+        let _ = paint_panel(out, p);
+    }
+    match outcome {
+        Outcome::Cancelled => Ok(()),
+        Outcome::Selected(row) => dispatch::open_row(estates, &row),
+        Outcome::Fresh(row) => dispatch::fresh_row(estates, &row),
+        Outcome::Create { address, brief } => dispatch::create_and_open(estates, &address, &brief),
+    }
+}
+
+/// Paint a whole screen herdr's panel: `panel_bg` behind `text`, every
+/// cell cleared to it, the cursor home. herdr's pane emulator
+/// (libghostty-vt) erases with the cursor's background (Screen.zig
+/// 1995-1998, used at :1830), so the clear fills every cell, and the
+/// plain lines written after it (progress.rs's) keep those colours.
+fn paint_panel(out: &mut impl Write, p: &Palette) -> std::io::Result<()> {
+    crossterm::queue!(
+        out,
+        SetBackgroundColor(p.panel_bg.into_crossterm()),
+        SetForegroundColor(p.text.into_crossterm()),
+        Clear(ClearType::All),
+        MoveTo(0, 0)
+    )?;
+    out.flush()
+}
+
+/// herdr's panel on the popup's own screen, outside ratatui's frames:
+/// painted as the picker starts and again by `dispatch_outcome`, then
+/// SGR 0 when it drops, on every exit path. Only inside herdr
+/// (`$HERDR_PLUGIN_ID` set), whose popup frame rings any cell left the
+/// terminal's own background; a shell run keeps its terminal's colours.
+struct Panel(Option<Palette>);
+
+impl Panel {
+    fn new(p: Palette) -> Self {
+        let panel = Panel(non_empty_env("HERDR_PLUGIN_ID").map(|_| p));
+        if let Some(p) = &panel.0 {
+            let _ = paint_panel(&mut std::io::stdout(), p);
+        }
+        panel
+    }
+}
+
+impl Drop for Panel {
+    fn drop(&mut self) {
+        if self.0.is_some() {
+            let mut out = std::io::stdout();
+            let _ = write!(out, "\x1b[0m").and_then(|()| out.flush());
+        }
     }
 }
 
@@ -224,7 +291,7 @@ fn creatable_estates(estates: &toml::Table) -> BTreeMap<String, String> {
         .collect()
 }
 
-fn run_interactive(state: AppState) -> Result<Outcome, EstateError> {
+fn run_interactive(state: AppState, look: (Palette, Indicators)) -> Result<Outcome, EstateError> {
     // `try_init` enables raw mode before entering the alternate screen;
     // if the second step fails, raw mode is already on with nothing yet
     // constructed to undo it on drop. Restore directly on this path
@@ -242,20 +309,7 @@ fn run_interactive(state: AppState) -> Result<Outcome, EstateError> {
     // A paste arrives whole, so its newlines can't press Enter.
     crossterm::execute!(std::io::stdout(), EnableBracketedPaste)
         .map_err(|e| EstateError::Protocol(format!("could not start the terminal: {e}")))?;
-    pick_in(&mut terminal, state, &mut CrosstermEvents)
-}
-
-/// The picker on a terminal that is already set up: herdr's look, read
-/// once as the popup opens (a theme changed while it is open shows the
-/// next time it opens), then the event loop. Split out of
-/// `run_interactive`, which needs a real terminal, so a test can run it
-/// on a `TestBackend` and see the look come from herdr's config.
-fn pick_in<B: ratatui::backend::Backend>(
-    terminal: &mut ratatui::Terminal<B>,
-    state: AppState,
-    events: &mut impl EventSource,
-) -> Result<Outcome, EstateError> {
-    event_loop(terminal, state, events, theme::load())
+    event_loop(&mut terminal, state, &mut CrosstermEvents, look)
 }
 
 /// Where `event_loop` gets its input from — real crossterm in
@@ -298,7 +352,7 @@ fn tone_style(tone: Tone, p: &Palette) -> Style {
 /// contrast text on accent, bold. The glyph and meta take it too.
 fn bar_style(p: &Palette) -> Style {
     Style::new()
-        .fg(p.contrast)
+        .fg(p.contrast())
         .bg(p.accent)
         .add_modifier(Modifier::BOLD)
 }
@@ -713,7 +767,7 @@ mod event_loop_tests {
         assert_eq!(
             bar_style(&p),
             Style::new()
-                .fg(p.contrast)
+                .fg(p.contrast())
                 .bg(p.accent)
                 .add_modifier(Modifier::BOLD)
         );
@@ -722,14 +776,14 @@ mod event_loop_tests {
     #[test]
     fn the_popup_paints_in_the_look_herdrs_config_names() {
         use ratatui::style::Color;
-        // The operator's symbols, and a theme the picker can't copy.
-        // `pick_in` is what `run_interactive` runs once the terminal is
-        // up, so this is the popup reading herdr's config for itself.
+        // The operator's theme, vesper, with symbols. `run` hands the
+        // look it loads to the loop `run_interactive` runs once the
+        // terminal is up, so this is the popup reading herdr's config.
         let d = crate::test_support::TempDir::new();
         let cfg = d.path().join("config.toml");
         std::fs::write(
             &cfg,
-            "[theme]\nname = \"nord\"\n[ui]\nstatus_indicators = \"symbols\"\n",
+            "[theme]\nname = \"vesper\"\n[ui]\nstatus_indicators = \"symbols\"\n",
         )
         .unwrap();
         let _g =
@@ -745,15 +799,61 @@ mod event_loop_tests {
         let mut terminal = test_terminal();
         let mut events = ScriptedEvents::new(vec![Scripted::Event(key_press(KeyCode::Esc))]);
         assert_eq!(
-            pick_in(&mut terminal, AppState::new(rows), &mut events).unwrap(),
+            event_loop(
+                &mut terminal,
+                AppState::new(rows),
+                &mut events,
+                theme::load()
+            )
+            .unwrap(),
             Outcome::Cancelled
         );
         let buf = terminal.backend().buffer();
         // herdr's symbol for working, not its default dot...
         assert_eq!(buf[(2, 2)].symbol(), "◐");
-        // ...on the terminal palette's accent bar, with its rule colour.
-        assert_eq!(buf[(2, 2)].bg, Color::Blue);
-        assert_eq!(buf[(1, 1)].fg, Color::DarkGray);
+        // ...on vesper's accent bar (#ffc799), under its rule (#282828).
+        assert_eq!(buf[(2, 2)].bg, Color::Rgb(255, 199, 153));
+        assert_eq!(buf[(1, 1)].fg, Color::Rgb(40, 40, 40));
+    }
+
+    #[test]
+    fn a_pick_dispatches_on_a_screen_painted_herdrs_panel_again() {
+        // Inside herdr the main screen the dispatch's progress shows on
+        // is painted vesper's panel first: #1a1a1a behind #ffffff,
+        // cleared to, the cursor home. A shell run (no panel) leaves it
+        // alone. Either way the live row's workspace is focused. The hold
+        // for a failure is `run`'s, so a failed dispatch here fails fast
+        // rather than waiting on this terminal for a key.
+        let vesper = "[theme]\nname = \"vesper\"\n".parse().unwrap();
+        let vesper = theme::resolve(Some(&vesper)).0;
+        let painted = "\x1b[48;2;26;26;26m\x1b[38;2;255;255;255m\x1b[2J\x1b[1;1H";
+        for (panel, want) in [(Some(&vesper), painted), (None, "")] {
+            let d = crate::test_support::TempDir::new();
+            let fake = crate::test_support::FakeHerdr::new();
+            let _g = crate::test_support::EnvGuard::set(&[
+                ("HERDR_BIN_PATH", fake.bin_path().to_str().unwrap()),
+                ("HERDR_PLUGIN_STATE_DIR", d.path().to_str().unwrap()),
+            ]);
+            fake.set_response(
+                0,
+                r#"{"result": {"workspaces": [
+                    {"workspace_id": "w9", "label": "home/garden", "agent_status": "working"}
+                ]}}"#,
+                0,
+            );
+            let row = Row {
+                address: "home/garden".to_string(),
+                state: RowState::Live {
+                    workspace_id: "w9".to_string(),
+                    agent_status: "working".to_string(),
+                },
+                brief: String::new(),
+            };
+            let mut out = Vec::new();
+            dispatch_outcome(&toml::Table::new(), Outcome::Selected(row), panel, &mut out).unwrap();
+            assert_eq!(String::from_utf8(out).unwrap(), want, "{panel:?}");
+            assert_eq!(fake.argv(1), vec!["workspace", "focus", "w9"]);
+        }
     }
 
     #[test]
