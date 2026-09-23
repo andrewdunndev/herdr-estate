@@ -944,9 +944,7 @@ mod tests {
     fn created_ids_missing_workspace_id_errors() {
         let bad = HerdrResult {
             ok: true,
-            returncode: 0,
             data: serde_json::json!({"root_pane": {"pane_id": "p1"}}),
-            stderr: String::new(),
         };
         assert!(matches!(created_ids(&bad), Err(EstateError::Protocol(_))));
     }
@@ -955,9 +953,7 @@ mod tests {
     fn created_ids_missing_pane_id_errors() {
         let bad = HerdrResult {
             ok: true,
-            returncode: 0,
             data: serde_json::json!({"workspace": {"workspace_id": "w1"}}),
-            stderr: String::new(),
         };
         assert!(matches!(created_ids(&bad), Err(EstateError::Protocol(_))));
     }
@@ -966,12 +962,10 @@ mod tests {
     fn created_ids_valid_response_returns_both() {
         let ok = HerdrResult {
             ok: true,
-            returncode: 0,
             data: serde_json::json!({
                 "workspace": {"workspace_id": "w9", "label": "home/garden"},
                 "root_pane": {"pane_id": "p1"},
             }),
-            stderr: String::new(),
         };
         assert_eq!(
             created_ids(&ok).unwrap(),

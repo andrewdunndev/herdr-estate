@@ -31,40 +31,9 @@ pub fn scrub_env(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Returned internally by `call_herdr(check: true)` on a non-zero herdr
-/// exit. A separate type from `EstateError` that converts into
-/// `EstateError::Protocol` at the point `call_herdr` returns it, so every
-/// caller downstream of the herdr boundary still deals with the one
-/// crate-wide error enum.
-#[derive(Debug)]
-pub struct HerdrError {
-    pub herdr_args: Vec<String>,
-    pub returncode: i32,
-    pub stderr: String,
-    pub stdout: String,
-}
-
-impl std::fmt::Display for HerdrError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let raw: &str = if !self.stderr.is_empty() {
-            &self.stderr
-        } else if !self.stdout.is_empty() {
-            &self.stdout
-        } else {
-            ""
-        };
-        let detail: String = raw.trim().chars().take(300).collect();
-        write!(
-            f,
-            "herdr {} failed: {detail}",
-            redacted_args(&self.herdr_args).join(" ")
-        )
-    }
-}
-
 /// What a masked `--env` value reads as, in a `--dry-run` plan and in a
 /// failed call's message alike.
-pub const ENV_VALUE_MASK: &str = "<from estates.toml>";
+pub(crate) const ENV_VALUE_MASK: &str = "<from estates.toml>";
 
 /// `args` for display, with the value of every `--env KEY=VALUE` masked.
 /// A failed `workspace create` carries the estate's env values in its
@@ -86,12 +55,22 @@ fn redacted_args(args: &[String]) -> Vec<String> {
     out
 }
 
-impl std::error::Error for HerdrError {}
-
-impl From<HerdrError> for EstateError {
-    fn from(e: HerdrError) -> Self {
-        EstateError::Protocol(e.to_string())
-    }
+/// The `EstateError::Protocol` message for a non-zero herdr exit on
+/// `call_herdr(check: true)`: the redacted argv, then stderr if any, else
+/// stdout, trimmed to 300 chars.
+fn failure_message(herdr_args: &[String], stderr: &str, stdout: &str) -> String {
+    let raw: &str = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        ""
+    };
+    let detail: String = raw.trim().chars().take(300).collect();
+    format!(
+        "herdr {} failed: {detail}",
+        redacted_args(herdr_args).join(" ")
+    )
 }
 
 /// `agent_status` off a `workspace list`/`workspace get` row. Fails
@@ -198,13 +177,11 @@ pub struct PaneRef {
 #[derive(Debug, Clone)]
 pub struct HerdrResult {
     pub ok: bool,
-    pub returncode: i32,
     /// The `"result"` object of herdr's `{"result": ...}` envelope, or
     /// the whole parsed payload when it carried no `"result"` key.
     /// Always a JSON object — empty when herdr's stdout was empty,
     /// malformed, or shaped as something other than an object.
     pub data: serde_json::Value,
-    pub stderr: String,
 }
 
 /// `$HERDR_BIN_PATH` when set to a non-empty value, else the bare name
@@ -239,12 +216,9 @@ pub fn call_herdr(args: &[String], check: bool) -> Result<HerdrResult, EstateErr
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
     if check && !ok {
-        return Err(EstateError::from(HerdrError {
-            herdr_args: args.to_vec(),
-            returncode,
-            stderr,
-            stdout,
-        }));
+        return Err(EstateError::Protocol(failure_message(
+            args, &stderr, &stdout,
+        )));
     }
 
     let mut data = serde_json::Value::Object(serde_json::Map::new());
@@ -260,12 +234,7 @@ pub fn call_herdr(args: &[String], check: bool) -> Result<HerdrResult, EstateErr
         }
     }
 
-    Ok(HerdrResult {
-        ok,
-        returncode,
-        data,
-        stderr,
-    })
+    Ok(HerdrResult { ok, data })
 }
 
 /// Every workspace herdr currently has open, via `workspace list`. A
@@ -428,8 +397,8 @@ mod tests {
 
     #[test]
     fn a_failed_call_message_masks_every_configured_env_value() {
-        let e = HerdrError {
-            herdr_args: args(&[
+        let msg = failure_message(
+            &args(&[
                 "workspace",
                 "create",
                 "--label",
@@ -441,12 +410,11 @@ mod tests {
                 "--env",
                 "SECRET_TOKEN=sk-do-not-log",
             ]),
-            returncode: 1,
-            stderr: "boom".to_string(),
-            stdout: String::new(),
-        };
+            "boom",
+            "",
+        );
         assert_eq!(
-            e.to_string(),
+            msg,
             "herdr workspace create --label home/garden \
              --env HERDR_ESTATE_ADDRESS=home/garden --env ANTHROPIC_API_KEY= \
              --env SECRET_TOKEN=<from estates.toml> failed: boom"

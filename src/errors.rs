@@ -35,8 +35,6 @@ impl fmt::Display for EstateError {
 
 impl std::error::Error for EstateError {}
 
-pub type Result<T> = std::result::Result<T, EstateError>;
-
 #[cfg(test)]
 mod tests {
     use super::*;

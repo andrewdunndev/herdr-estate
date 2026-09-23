@@ -1,25 +1,25 @@
 //! herdr-estate: durable campaigns for herdr. See `docs/vocabulary.md` for
 //! the six words this crate uses in their one defined sense.
 
-pub mod adapters;
-pub mod campaign;
+mod adapters;
+mod campaign;
 pub mod cli;
-pub mod config;
-pub mod continuity;
-pub mod dispatch;
-pub mod doubleopen;
-pub mod errors;
-pub mod frontmatter;
-pub mod herdrcli;
-pub mod name;
-pub mod ownership;
-pub mod paths;
+mod config;
+mod continuity;
+mod dispatch;
+mod doubleopen;
+mod errors;
+mod frontmatter;
+mod herdrcli;
+mod name;
+mod ownership;
+mod paths;
 pub mod picker;
-pub mod progress;
-pub mod prompt;
-pub mod verb;
-pub mod verbs;
-pub mod worktree;
+mod progress;
+mod prompt;
+mod verb;
+mod verbs;
+mod worktree;
 
 /// Test-only support for the tests scattered across this crate's modules
 /// that read or write process environment variables. `std::env` is
