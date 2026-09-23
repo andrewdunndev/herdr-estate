@@ -11,5 +11,6 @@ tab, pane, agent) are only ever used in herdr's sense.
 - **address**: `estate/campaign`, e.g. `home/garden`. It is the
   workspace label and it is exported to the agent.
 - **resume**: continue the campaign's latest conversation.
-- **fresh**: retire the latest conversation and start a new one in the
-  same space. The campaign's log is what carries the work across.
+- **fresh**: retire the latest conversation and start a new one at the
+  same address, with the same paths, flags and prompts. The campaign's
+  `log.md` is what carries the work across.

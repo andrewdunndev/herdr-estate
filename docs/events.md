@@ -24,22 +24,15 @@ herdr-estate: home/quern: creating campaign.md and log.md in /home/me/estates/ho
 
 The picker's `+ create` runs that, then opens the campaign as a new row,
 with the lines above. If the start fails, nothing is deleted: the
-campaign stays, a new row, and one more line says so:
-
-```
-herdr-estate: home/quern: campaign created, but starting it failed — it stays as a new row
-```
+campaign stays as a new row, and one more line says so.
 
 When a dispatch from the picker fails, the popup stays open on the error
 until a key press. Keys typed during the wait are discarded first, so
 they can't dismiss it unread.
 
-A `--dry-run` prints no progress lines, and neither does a refusal made
-before anything changes: a running agent, a duplicate label, a workspace
-herdr-estate did not create, a name `create` refuses, anything already
-at its path, or, for the picker's `+ create`, any workspace already
-carrying the address. A close that can't be confirmed is refused after
-its `closing` line, and nothing is created.
+`--dry-run`, and any refusal made before something changes, print no
+progress lines. A close that can't be confirmed is refused after its
+`closing` line, and nothing is created.
 
 ## events.log
 
@@ -50,10 +43,12 @@ error. herdr keeps each plugin action's own output in `herdr plugin log
 list`; the picker popup's output is gone once it closes. `events.log`
 covers every launch path, one timestamped line per step.
 
-The state dir, which also holds the ownership record, is
-`$HERDR_PLUGIN_STATE_DIR` when herdr sets it (an action, or the picker
-pane), otherwise `$XDG_STATE_HOME/herdr-estate` or
-`~/.local/state/herdr-estate`. The log is created readable by you only,
+The state dir is `$HERDR_PLUGIN_STATE_DIR` when herdr sets it (an
+action, or the picker pane), otherwise `$XDG_STATE_HOME/herdr-estate`
+or `~/.local/state/herdr-estate`. It also holds the ownership record
+(`owned.json`), each campaign's assembled prompt
+(`<estate>-<campaign>.prompt.md`) and the worktrees the verbs create
+(under `worktrees/`). The log is created readable by you only,
 and a failed herdr call's message masks every estate `env` value the way
 a `--dry-run` plan does, on stderr and in the log alike. The log only
 grows; delete it whenever.

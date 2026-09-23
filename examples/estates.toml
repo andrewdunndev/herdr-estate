@@ -1,18 +1,20 @@
 [estate.home]
-root = "~/estates/home"        # the repo that holds the campaigns
+root = "~/estates/home"        # the repo that holds the campaigns; the only required key
 campaigns = "campaigns"        # directory under root
 agent = "claude"               # default herdr agent kind
 paths = ["~/code"]             # extra directories, added before each campaign's own
-prompts = ["prompts/base.md"]  # appended to every agent
+prompts = ["prompts/base.md"]  # joined in order and appended to every agent
 env = { }                      # exported into every workspace
+
+# In root, paths and prompts, ~ and $VAR expand first; a relative
+# paths or prompts entry then resolves against root.
 
 [estate.home.claude]
 remote-control = true          # default for every campaign in this estate;
                                 # a campaign's own claude: table can override
                                 # or turn off with false
 
-# Copy the block above into $HERDR_PLUGIN_CONFIG_DIR/estates.toml (or
-# ~/.config/herdr-estate/estates.toml for a bare-shell invocation), point
-# `root` at a real repo, and add one [estate.<name>] table per estate.
-# Anything private or professional (a login endpoint, a header stamp)
-# is an `env` entry in your own table; this file ships no real names.
+# Copy this file to ~/.config/herdr-estate/estates.toml, point `root` at
+# a real repo, and add one [estate.<name>] table per estate. Under herdr,
+# $HERDR_PLUGIN_CONFIG_DIR/estates.toml is read instead, but only when
+# that file exists.
