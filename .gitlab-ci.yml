@@ -2,6 +2,12 @@ default:
   interruptible: true
 
 workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && $CI_PIPELINE_SOURCE == "push"
+      when: never
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
   auto_cancel:
     on_new_commit: interruptible
 
@@ -21,30 +27,37 @@ include:
     inputs:
       package_path: .
 
-  # cargo-audit vulnerability scan (allow_failure: true, catalog default).
+  # cargo-audit vulnerability scan (overridden below to allow_failure: false).
   - component: gitlab.com/dunn.dev/pipeline/rust-audit@4.6.0
 
-  # Tag-only: cross-compile linux/amd64, linux/arm64, darwin/arm64
-  # (cargo-zigbuild + baked macOS SDK, no Mac runner needed), cosign
-  # keyless-sign, upload to the package registry. Fixed 3-target
-  # matrix satisfies herdr-plugin.toml's platforms=["macos","linux"]
-  # with no target-selection input to set.
+  # Tag-only: signed binaries, SBOMs, provenance, GitLab Release.
   - component: gitlab.com/dunn.dev/pipeline/rust-release-binary@4.6.0
     inputs:
       binary_name: herdr-estate
       package_name: herdr-estate
 
-  # Tag-only: CycloneDX SBOM per binary via syft.
   - component: gitlab.com/dunn.dev/pipeline/rust-sbom@4.6.0
     inputs:
       package_name: herdr-estate
 
-  # Tag-only: SLSA provenance for each binary, signed keyless through
-  # GitLab OIDC. Same template every other release in the estate wires.
   - component: gitlab.com/dunn.dev/pipeline/slsa-attest@4.6.0
 
-  # Tag-only: GitLab Release from the annotated tag's message,
-  # binaries + SBOMs linked as assets. Idempotent across reruns.
   - component: gitlab.com/dunn.dev/pipeline/release-create@4.6.0
     inputs:
       package_name: herdr-estate
+
+# rust-lint and rust-audit ship with no rules of their own, so they
+# fall back to the implicit only: [branches, tags] default and never
+# run in MR pipelines; restate rules to include merge_request_event.
+lint:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_COMMIT_TAG'
+
+audit:
+  allow_failure: false
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_COMMIT_TAG'
