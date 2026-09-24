@@ -116,6 +116,13 @@ agent a second press stops it first. The footer lists its keys.
 
 ## Develop
 
+Development happens on
+[GitLab](https://gitlab.com/dunn.dev/herdr-estate), where review, CI
+and releases run; the
+[GitHub repository](https://github.com/andrewdunndev/herdr-estate) is
+a mirror. If the plugin helps you, we'd like to hear how you use it:
+open an issue on either, or start a discussion on GitHub.
+
 ```sh
 cargo build --release && herdr plugin link "$PWD"
 cargo fmt --check && cargo clippy --release --all-targets --all-features -- -D warnings && cargo test
