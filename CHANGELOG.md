@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.2 - 2026-09-24
+
 - The picker's Ctrl-f now doubles as a stop: on a row whose agent is
   idle or done, a first press arms and a second press on the same row
   stops it and starts fresh. It refuses a working or blocked agent, a

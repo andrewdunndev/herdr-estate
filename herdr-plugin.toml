@@ -1,6 +1,6 @@
 id = "herdr-estate"
 name = "Estate"
-version = "0.1.1"
+version = "0.1.2"
 min_herdr_version = "0.9.1"
 description = "Long-running campaigns for herdr: threads of agent work, addressed as estate/campaign, that outlive every conversation."
 platforms = ["macos", "linux"]
