@@ -103,6 +103,7 @@ mod tests {
             prompt_files: Vec::new(),
             kind_flags: BTreeMap::new(),
             env: BTreeMap::new(),
+            prepare: None,
         }
     }
 

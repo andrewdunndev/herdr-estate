@@ -246,6 +246,41 @@ mod tests {
     }
 
     #[test]
+    fn live_row_genuinely_alive_never_runs_prepare() {
+        let mut f = make_fixture();
+        // A binary that doesn't exist: if this focus-only path ran it,
+        // the run would fail right here.
+        if let Some(toml::Value::Table(row)) = f.estates.get_mut("home") {
+            row.insert(
+                "prepare".to_string(),
+                toml::Value::Array(vec![toml::Value::String(
+                    "/no/such/prepare-binary".to_string(),
+                )]),
+            );
+        }
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w9", "label": "home/garden", "agent_status": "working"}
+            ]}}"#,
+            0,
+        );
+        let row = Row {
+            address: "home/garden".to_string(),
+            state: RowState::Live {
+                workspace_id: "w9".to_string(),
+                agent_status: "working".to_string(),
+            },
+            brief: String::new(),
+        };
+        open_row(&f.estates, &row).unwrap();
+        assert_eq!(f.fake.call_count(), 2);
+        assert!(!crate::progress::logged_messages()
+            .iter()
+            .any(|l| l.contains("prepare")));
+    }
+
+    #[test]
     fn dormant_row_resumes_then_focuses_the_new_workspace() {
         let f = make_fixture();
         let cdir = f.campaign("garden");

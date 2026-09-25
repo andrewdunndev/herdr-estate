@@ -47,6 +47,9 @@ pub struct Campaign {
     pub prompt_files: Vec<PathBuf>,
     pub kind_flags: BTreeMap<String, Scalar>,
     pub env: BTreeMap<String, String>,
+    /// The estate's optional `prepare` command, argv form (no shell):
+    /// `None` when the estate row carries no `prepare` key.
+    pub prepare: Option<Vec<String>>,
 }
 
 fn rooted(root: &Path, p: &str) -> PathBuf {
@@ -115,6 +118,41 @@ fn scalar_non_empty_str(s: &Scalar) -> Option<&str> {
         Scalar::Str(v) if !v.is_empty() => Some(v),
         _ => None,
     }
+}
+
+/// The estate row's optional `prepare` command: a non-empty array of
+/// non-empty strings, argv form, no shell. Each element gets the same
+/// leading-`~/` expansion `root` and `paths` get, so a command can name
+/// a script under the operator's home directory. `None` when the row
+/// carries no `prepare` key at all; a named `EstateError::Config`
+/// otherwise, checked at resolve time so a broken estate never reaches
+/// `open_workspace`.
+fn estate_prepare(
+    row: &toml::Table,
+    estate_name: &str,
+) -> Result<Option<Vec<String>>, EstateError> {
+    let Some(v) = row.get("prepare") else {
+        return Ok(None);
+    };
+    let err = || {
+        EstateError::Config(format!(
+            "estate '{estate_name}' prepare: must be a non-empty array of non-empty strings"
+        ))
+    };
+    let arr = v.as_array().ok_or_else(err)?;
+    if arr.is_empty() {
+        return Err(err());
+    }
+    let argv: Vec<String> = arr
+        .iter()
+        .map(|x| {
+            x.as_str()
+                .filter(|s| !s.is_empty())
+                .map(|s| expand(s).to_string_lossy().into_owned())
+                .ok_or_else(err)
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(Some(argv))
 }
 
 /// The estate's row in the table, its root, expanded, which must be a
@@ -194,10 +232,25 @@ pub fn resolve(
     let mut add_dirs: Vec<PathBuf> = Vec::new();
     for p in estate_paths.iter().chain(campaign_paths.iter()) {
         let rp = rooted(&root, p);
-        if !add_dirs.contains(&rp) {
-            add_dirs.push(rp);
+        if add_dirs.contains(&rp) {
+            continue;
         }
+        // A path an operator's estate or campaign named but that isn't
+        // there (moved, renamed, never checked out) would otherwise
+        // reach the agent's `--add-dir` and fail the launch outright;
+        // skip it and say so, rather than let one stale entry block the
+        // whole campaign.
+        if !rp.exists() {
+            crate::progress::step(&format!(
+                "{address}: add-dir {} does not exist, skipping",
+                rp.display()
+            ));
+            continue;
+        }
+        add_dirs.push(rp);
     }
+
+    let prepare = estate_prepare(row, &estate_name)?;
 
     let prompt_files: Vec<PathBuf> = toml_str_array(row, "prompts")
         .iter()
@@ -262,6 +315,7 @@ pub fn resolve(
         prompt_files,
         kind_flags,
         env,
+        prepare,
     })
 }
 
@@ -383,10 +437,17 @@ mod tests {
     fn paths_expanded() {
         let d = TempDir::new();
         let root = d.path().join("home");
-        make_estate(&root, "garden", "---\npaths: [/a, /b]\n---\n");
+        let (a, b) = (d.path().join("a"), d.path().join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        make_estate(
+            &root,
+            "garden",
+            &format!("---\npaths: [{}, {}]\n---\n", a.display(), b.display()),
+        );
         let estates = estates_with(row(&root));
         let c = resolve(&estates, "home/garden", false).unwrap();
-        assert_eq!(c.add_dirs, [PathBuf::from("/a"), PathBuf::from("/b")]);
+        assert_eq!(c.add_dirs, [a, b]);
     }
 
     #[test]
@@ -483,37 +544,46 @@ mod tests {
     fn estate_paths_precede_campaign_paths() {
         let d = TempDir::new();
         let root = d.path().join("home");
-        make_estate(&root, "garden", "---\npaths: [/b]\n---\n");
+        let (a, b) = (d.path().join("a"), d.path().join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        make_estate(
+            &root,
+            "garden",
+            &format!("---\npaths: [{}]\n---\n", b.display()),
+        );
         let mut r = row(&root);
         r.insert(
             "paths".to_string(),
-            toml::Value::Array(vec![toml::Value::String("/a".to_string())]),
+            toml::Value::Array(vec![toml::Value::String(a.to_string_lossy().into_owned())]),
         );
         let estates = estates_with(r);
         let c = resolve(&estates, "home/garden", false).unwrap();
-        assert_eq!(c.add_dirs, [PathBuf::from("/a"), PathBuf::from("/b")]);
+        assert_eq!(c.add_dirs, [a, b]);
     }
 
     #[test]
     fn duplicate_estate_and_campaign_path_collapses() {
         let d = TempDir::new();
         let root = d.path().join("home");
-        make_estate(&root, "garden", "---\npaths: [~/code, /b]\n---\n");
+        let b = d.path().join("b");
+        std::fs::create_dir_all(&b).unwrap();
+        let fake_home = d.path().join("fake-home");
+        std::fs::create_dir_all(fake_home.join("code")).unwrap();
+        make_estate(
+            &root,
+            "garden",
+            &format!("---\npaths: [~/code, {}]\n---\n", b.display()),
+        );
         let mut r = row(&root);
         r.insert(
             "paths".to_string(),
             toml::Value::Array(vec![toml::Value::String("~/code".to_string())]),
         );
         let estates = estates_with(r);
-        let _g = crate::test_support::EnvGuard::set(&[("HOME", "/tmp/fake-home-campaign-test")]);
+        let _g = crate::test_support::EnvGuard::set(&[("HOME", fake_home.to_str().unwrap())]);
         let c = resolve(&estates, "home/garden", false).unwrap();
-        assert_eq!(
-            c.add_dirs,
-            [
-                PathBuf::from("/tmp/fake-home-campaign-test/code"),
-                PathBuf::from("/b")
-            ]
-        );
+        assert_eq!(c.add_dirs, [fake_home.join("code"), b]);
     }
 
     #[test]
@@ -681,6 +751,7 @@ mod tests {
         let d = TempDir::new();
         let root = d.path().join("home");
         make_estate(&root, "garden", "---\npaths: [notes]\n---\n");
+        std::fs::create_dir_all(root.join("notes")).unwrap();
         let estates = estates_with(row(&root));
         let c = resolve(&estates, "home/garden", false).unwrap();
         assert_eq!(c.add_dirs, [root.join("notes")]);
@@ -690,10 +761,146 @@ mod tests {
     fn absolute_campaign_paths_pass_through() {
         let d = TempDir::new();
         let root = d.path().join("home");
-        make_estate(&root, "garden", "---\npaths: [/a]\n---\n");
+        let a = d.path().join("a");
+        std::fs::create_dir_all(&a).unwrap();
+        make_estate(
+            &root,
+            "garden",
+            &format!("---\npaths: [{}]\n---\n", a.display()),
+        );
         let estates = estates_with(row(&root));
         let c = resolve(&estates, "home/garden", false).unwrap();
-        assert_eq!(c.add_dirs, [PathBuf::from("/a")]);
+        assert_eq!(c.add_dirs, [a]);
+    }
+
+    #[test]
+    fn absent_add_dir_is_skipped_with_a_warning_present_one_is_kept() {
+        let d = TempDir::new();
+        let root = d.path().join("home");
+        let present = d.path().join("present");
+        std::fs::create_dir_all(&present).unwrap();
+        let absent = d.path().join("absent");
+        make_estate(
+            &root,
+            "garden",
+            &format!(
+                "---\npaths: [{}, {}]\n---\n",
+                absent.display(),
+                present.display()
+            ),
+        );
+        let estates = estates_with(row(&root));
+        let state_dir = d.path().join("state");
+        let _g = crate::test_support::EnvGuard::set(&[(
+            "HERDR_PLUGIN_STATE_DIR",
+            state_dir.to_str().unwrap(),
+        )]);
+        let c = resolve(&estates, "home/garden", false).unwrap();
+        assert_eq!(c.add_dirs, [present]);
+        assert_eq!(
+            crate::progress::logged_messages(),
+            vec![format!(
+                "home/garden: add-dir {} does not exist, skipping",
+                absent.display()
+            )]
+        );
+    }
+
+    #[test]
+    fn no_prepare_key_is_none() {
+        let d = TempDir::new();
+        let root = d.path().join("home");
+        make_estate(&root, "garden", "---\n---\n");
+        let estates = estates_with(row(&root));
+        let c = resolve(&estates, "home/garden", false).unwrap();
+        assert_eq!(c.prepare, None);
+    }
+
+    #[test]
+    fn prepare_argv_expands_a_leading_tilde() {
+        let d = TempDir::new();
+        let root = d.path().join("home");
+        make_estate(&root, "garden", "---\n---\n");
+        let mut r = row(&root);
+        r.insert(
+            "prepare".to_string(),
+            toml::Value::Array(vec![
+                toml::Value::String("~/bin/prepare.sh".to_string()),
+                toml::Value::String("--fast".to_string()),
+            ]),
+        );
+        let estates = estates_with(r);
+        let fake_home = d.path().join("fake-home");
+        let _g = crate::test_support::EnvGuard::set(&[("HOME", fake_home.to_str().unwrap())]);
+        let c = resolve(&estates, "home/garden", false).unwrap();
+        assert_eq!(
+            c.prepare,
+            Some(vec![
+                fake_home
+                    .join("bin/prepare.sh")
+                    .to_string_lossy()
+                    .into_owned(),
+                "--fast".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn prepare_must_be_an_array() {
+        let d = TempDir::new();
+        let root = d.path().join("home");
+        make_estate(&root, "garden", "---\n---\n");
+        let mut r = row(&root);
+        r.insert(
+            "prepare".to_string(),
+            toml::Value::String("bare".to_string()),
+        );
+        let estates = estates_with(r);
+        let err = resolve(&estates, "home/garden", false).unwrap_err();
+        assert!(matches!(err, EstateError::Config(_)));
+        assert!(err.to_string().contains("prepare"));
+    }
+
+    #[test]
+    fn prepare_must_be_non_empty() {
+        let d = TempDir::new();
+        let root = d.path().join("home");
+        make_estate(&root, "garden", "---\n---\n");
+        let mut r = row(&root);
+        r.insert("prepare".to_string(), toml::Value::Array(Vec::new()));
+        let estates = estates_with(r);
+        let err = resolve(&estates, "home/garden", false).unwrap_err();
+        assert!(matches!(err, EstateError::Config(_)));
+    }
+
+    #[test]
+    fn prepare_element_must_be_a_string() {
+        let d = TempDir::new();
+        let root = d.path().join("home");
+        make_estate(&root, "garden", "---\n---\n");
+        let mut r = row(&root);
+        r.insert(
+            "prepare".to_string(),
+            toml::Value::Array(vec![toml::Value::Integer(1)]),
+        );
+        let estates = estates_with(r);
+        let err = resolve(&estates, "home/garden", false).unwrap_err();
+        assert!(matches!(err, EstateError::Config(_)));
+    }
+
+    #[test]
+    fn prepare_element_must_be_non_empty() {
+        let d = TempDir::new();
+        let root = d.path().join("home");
+        make_estate(&root, "garden", "---\n---\n");
+        let mut r = row(&root);
+        r.insert(
+            "prepare".to_string(),
+            toml::Value::Array(vec![toml::Value::String(String::new())]),
+        );
+        let estates = estates_with(r);
+        let err = resolve(&estates, "home/garden", false).unwrap_err();
+        assert!(matches!(err, EstateError::Config(_)));
     }
 
     #[test]

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- An estate row's `prepare` runs an argv command, no shell, in the
+  campaign's workdir before every create; a non-zero exit or a spawn
+  failure refuses the launch and creates nothing.
+- A `paths` entry that doesn't exist on disk is skipped, with a
+  warning, instead of being passed on to the agent.
+
 ## v0.1.2 - 2026-09-24
 
 - The picker's Ctrl-f now doubles as a stop: on a row whose agent is

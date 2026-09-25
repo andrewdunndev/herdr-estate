@@ -253,7 +253,16 @@ fn shlex_join(argv: &[String]) -> String {
         .join(" ")
 }
 
-fn print_plan(create_cmd: &[String], agent_cmd: &[String], close_cmd: Option<&[String]>) {
+fn print_plan(
+    prepare_cmd: Option<&[String]>,
+    create_cmd: &[String],
+    agent_cmd: &[String],
+    close_cmd: Option<&[String]>,
+) {
+    if let Some(prepare) = prepare_cmd {
+        println!("would prepare:");
+        println!("  {}", shlex_join(prepare));
+    }
     if let Some(close) = close_cmd {
         println!("would close:");
         println!("  herdr {}", shlex_join(close));
@@ -368,14 +377,66 @@ fn check_replaceable_running_workspace(address: &str) -> Result<Workspace, Estat
     }
 }
 
-/// Everything that can fail without herdr (prompt files exist) is
-/// validated before `ws` (an owned workspace, either non-alive or the
-/// idle/done one `check_replaceable_running_workspace` cleared) is
-/// closed with `close_reason` naming why in the progress line. Creates
-/// the replacement, validates the response, records ownership of the
-/// new workspace, and starts the agent. When `ws` is present but its
-/// close could not be confirmed, stops here with a guard error naming
-/// the workspace: nothing is created, no agent is started.
+/// The estate's `prepare` command, argv form, run with the campaign's
+/// workdir as cwd, stdin closed, stdout and stderr captured. A spawn
+/// error (a missing binary, say) or a non-zero exit both refuse the same
+/// way -- a guard error naming `address`, so the caller's `?` stops
+/// right here and never reaches the close or create that would
+/// otherwise follow. Success logs one progress step; the command's own
+/// stdout and stderr are otherwise discarded.
+fn run_prepare(campaign: &Campaign, address: &str, argv: &[String]) -> Result<(), EstateError> {
+    let output = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .current_dir(&campaign.workdir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| EstateError::Guard(format!("{address}: prepare failed: {e}")))?;
+    if !output.status.success() {
+        return Err(EstateError::Guard(format!(
+            "{address}: prepare failed: {}",
+            prepare_failure_detail(&output)
+        )));
+    }
+    progress::step(&format!("{address}: prepare ok"));
+    Ok(())
+}
+
+/// The first 3 non-empty lines of `output`'s stderr, or its stdout when
+/// stderr carried none, or the exit status when neither did -- whichever
+/// says the most about why `prepare` failed.
+fn prepare_failure_detail(output: &std::process::Output) -> String {
+    let lines_of = |bytes: &[u8]| -> Vec<String> {
+        String::from_utf8_lossy(bytes)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .take(3)
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let stderr_lines = lines_of(&output.stderr);
+    if !stderr_lines.is_empty() {
+        return stderr_lines.join(" | ");
+    }
+    let stdout_lines = lines_of(&output.stdout);
+    if !stdout_lines.is_empty() {
+        return stdout_lines.join(" | ");
+    }
+    output.status.to_string()
+}
+
+/// Everything that can fail without herdr (prompt files exist, the
+/// estate's `prepare` command) is validated before `ws` (an owned
+/// workspace, either non-alive or the idle/done one
+/// `check_replaceable_running_workspace` cleared) is closed with
+/// `close_reason` naming why in the progress line. Creates the
+/// replacement, validates the response, records ownership of the new
+/// workspace, and starts the agent. When `ws` is present but its close
+/// could not be confirmed, stops here with a guard error naming the
+/// workspace: nothing is created, no agent is started. A failed
+/// `prepare` stops even earlier, before that close: neither it nor the
+/// create that would follow it ever runs.
 fn open_workspace(
     campaign: &Campaign,
     address: &str,
@@ -386,6 +447,9 @@ fn open_workspace(
 ) -> Result<(String, String), EstateError> {
     if !campaign.prompt_files.is_empty() {
         prompt::write_prompt(&campaign.estate, &campaign.name, &campaign.prompt_files)?;
+    }
+    if let Some(argv) = &campaign.prepare {
+        run_prepare(campaign, address, argv)?;
     }
     if let Some(ws) = ws {
         progress::step(&format!(
@@ -468,6 +532,7 @@ fn short(id: &str) -> String {
 fn dry_run_plan(
     address: &str,
     ws: Option<&Workspace>,
+    prepare_cmd: Option<&[String]>,
     create_cmd_redacted: &[String],
     start_cmd: &[String],
 ) -> Result<i32, EstateError> {
@@ -488,7 +553,12 @@ fn dry_run_plan(
             }
         }
     };
-    print_plan(create_cmd_redacted, start_cmd, close_cmd.as_deref());
+    print_plan(
+        prepare_cmd,
+        create_cmd_redacted,
+        start_cmd,
+        close_cmd.as_deref(),
+    );
     Ok(0)
 }
 
@@ -546,6 +616,7 @@ pub(crate) fn resume_with_ids(
         let exit_code = dry_run_plan(
             address,
             ws.as_ref(),
+            campaign.prepare.as_deref(),
             &create_args(&campaign, true),
             &start_cmd,
         )?;
@@ -695,6 +766,7 @@ fn fresh_open(
         let exit_code = dry_run_plan(
             address,
             ws.as_ref(),
+            campaign.prepare.as_deref(),
             &create_args(campaign, true),
             &start_cmd,
         )?;
@@ -954,6 +1026,7 @@ mod tests {
             prompt_files: Vec::new(),
             kind_flags: BTreeMap::new(),
             env: BTreeMap::from([("K".to_string(), "V".to_string())]),
+            prepare: None,
         }
     }
 
@@ -1313,6 +1386,91 @@ mod tests {
         assert_eq!(continuity::read(&f.cdir).len(), 1);
     }
 
+    #[test]
+    fn resume_prepare_success_runs_in_the_workdir_before_the_create_call() {
+        let mut f = make_fixture("claude");
+        continuity::append(&f.cdir, "old-sid").unwrap();
+        let proj = crate::paths::home_dir()
+            .join(".claude")
+            .join("projects")
+            .join("p");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(proj.join("old-sid.jsonl"), "{}\n").unwrap();
+
+        let marker = f._tmp.path().join("marker");
+        let script = write_pwd_marker_script(f._tmp.path(), &marker);
+        set_prepare(&mut f, &[script.to_str().unwrap()]);
+
+        f.fake.set_response(0, empty_list(), 0);
+        f.fake.set_response(1, CREATE_OK, 0);
+        f.fake.set_response(2, r#"{"result": {}}"#, 0);
+
+        let rc = resume(&f.estates, "home/garden", false).unwrap();
+        assert_eq!(rc, 0);
+        assert_eq!(f.fake.call_count(), 3);
+        // The script's own `pwd` resolves any symlink in the OS temp
+        // dir (`/var` -> `/private/var` on macOS); canonicalize the
+        // expected side the same way before comparing.
+        let workdir = std::fs::canonicalize(f._tmp.path().join("home")).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap().trim(),
+            workdir.to_str().unwrap()
+        );
+        assert!(progress::logged_messages().contains(&"home/garden: prepare ok".to_string()));
+    }
+
+    #[test]
+    fn resume_prepare_failure_refuses_before_any_close_or_create() {
+        let mut f = make_fixture("claude");
+        continuity::append(&f.cdir, "old-sid").unwrap();
+        write_transcript("old-sid");
+        let script = write_failing_script(f._tmp.path(), &["boom"]);
+        set_prepare(&mut f, &[script.to_str().unwrap()]);
+        f.fake.set_response(0, empty_list(), 0);
+
+        let err = resume(&f.estates, "home/garden", false).unwrap_err();
+        assert!(
+            matches!(err, EstateError::Guard(ref msg) if msg.contains("prepare failed") && msg.contains("boom")),
+            "{err}"
+        );
+        // Only the read that checked for a live workspace; no close, no
+        // create, no start.
+        assert_eq!(f.fake.call_count(), 1);
+    }
+
+    #[test]
+    fn resume_prepare_spawn_failure_refuses_the_same_way() {
+        let mut f = make_fixture("claude");
+        continuity::append(&f.cdir, "old-sid").unwrap();
+        write_transcript("old-sid");
+        let missing = f._tmp.path().join("no-such-binary");
+        set_prepare(&mut f, &[missing.to_str().unwrap()]);
+        f.fake.set_response(0, empty_list(), 0);
+
+        let err = resume(&f.estates, "home/garden", false).unwrap_err();
+        assert!(
+            matches!(err, EstateError::Guard(ref msg) if msg.contains("prepare failed")),
+            "{err}"
+        );
+        assert_eq!(f.fake.call_count(), 1);
+    }
+
+    #[test]
+    fn resume_dry_run_never_runs_prepare() {
+        let mut f = make_fixture("claude");
+        continuity::append(&f.cdir, "old-sid").unwrap();
+        write_transcript("old-sid");
+        let marker = f._tmp.path().join("marker");
+        let script = write_pwd_marker_script(f._tmp.path(), &marker);
+        set_prepare(&mut f, &[script.to_str().unwrap(), "--flag"]);
+        f.fake.set_response(0, empty_list(), 0);
+
+        let rc = resume(&f.estates, "home/garden", true).unwrap();
+        assert_eq!(rc, 0);
+        assert_eq!(f.fake.call_count(), 1); // the live-workspace probe only
+        assert!(!marker.exists(), "dry run must never execute prepare");
+    }
+
     /// A persisted transcript for `sid`, which the claude-kind resume
     /// guard requires before it will start anything.
     fn write_transcript(sid: &str) {
@@ -1322,6 +1480,55 @@ mod tests {
             .join("p");
         std::fs::create_dir_all(&proj).unwrap();
         std::fs::write(proj.join(format!("{sid}.jsonl")), "{}\n").unwrap();
+    }
+
+    // --- prepare ---
+
+    /// Sets the fixture's `home` estate row's `prepare` key to `argv`.
+    fn set_prepare(f: &mut Fixture, argv: &[&str]) {
+        if let Some(toml::Value::Table(row)) = f.estates.get_mut("home") {
+            row.insert(
+                "prepare".to_string(),
+                toml::Value::Array(
+                    argv.iter()
+                        .map(|s| toml::Value::String(s.to_string()))
+                        .collect(),
+                ),
+            );
+        }
+    }
+
+    fn make_executable(path: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(path).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(path, perms).unwrap();
+        }
+    }
+
+    /// A `prepare` script that writes its own cwd to `marker` and exits
+    /// 0 -- what the "runs with the workdir as cwd" tests read back.
+    fn write_pwd_marker_script(dir: &Path, marker: &Path) -> PathBuf {
+        let script = dir.join("prepare-pwd.sh");
+        std::fs::write(&script, format!("#!/bin/sh\npwd > {marker:?}\n")).unwrap();
+        make_executable(&script);
+        script
+    }
+
+    /// A `prepare` script that prints each of `stderr_lines` to stderr,
+    /// then exits non-zero.
+    fn write_failing_script(dir: &Path, stderr_lines: &[&str]) -> PathBuf {
+        let script = dir.join("prepare-fail.sh");
+        let mut body = "#!/bin/sh\n".to_string();
+        for line in stderr_lines {
+            body.push_str(&format!("echo {line:?} >&2\n"));
+        }
+        body.push_str("exit 3\n");
+        std::fs::write(&script, body).unwrap();
+        make_executable(&script);
+        script
     }
 
     #[test]
@@ -1550,6 +1757,85 @@ mod tests {
     }
 
     #[test]
+    fn fresh_prepare_success_runs_before_the_close_and_the_create() {
+        let mut f = make_fixture("claude");
+        continuity::append(&f.cdir, "old-sid").unwrap();
+        ownership::record("home/garden", "w1").unwrap();
+        let marker = f._tmp.path().join("marker");
+        let script = write_pwd_marker_script(f._tmp.path(), &marker);
+        set_prepare(&mut f, &[script.to_str().unwrap()]);
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown"}
+            ]}}"#,
+            0,
+        );
+        f.fake.set_response(
+            1,
+            r#"{"result": {"workspace": {"label": "home/garden"}}}"#,
+            0,
+        );
+        f.fake.set_response(2, r#"{"result": {}}"#, 0);
+        f.fake.set_response(3, CREATE_OK, 0);
+        f.fake.set_response(4, r#"{"result": {}}"#, 0);
+
+        let rc = fresh(&f.estates, "home/garden", false).unwrap();
+        assert_eq!(rc, 0);
+        assert_eq!(f.fake.call_count(), 5);
+        // The script's own `pwd` resolves any symlink in the OS temp
+        // dir (`/var` -> `/private/var` on macOS); canonicalize the
+        // expected side the same way before comparing.
+        let workdir = std::fs::canonicalize(f._tmp.path().join("home")).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap().trim(),
+            workdir.to_str().unwrap()
+        );
+        let logged = progress::logged_messages();
+        let prepare_at = logged
+            .iter()
+            .position(|l| l == "home/garden: prepare ok")
+            .unwrap();
+        let closing_at = logged
+            .iter()
+            .position(|l| l.contains("closing w1"))
+            .unwrap();
+        assert!(prepare_at < closing_at, "{logged:?}");
+    }
+
+    #[test]
+    fn fresh_prepare_failure_refuses_before_any_close_or_create() {
+        let mut f = make_fixture("claude");
+        continuity::append(&f.cdir, "old-sid").unwrap();
+        ownership::record("home/garden", "w1").unwrap();
+        let script = write_failing_script(
+            f._tmp.path(),
+            &["boom", "line two", "line three", "dropped"],
+        );
+        set_prepare(&mut f, &[script.to_str().unwrap()]);
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown"}
+            ]}}"#,
+            0,
+        );
+
+        let err = fresh(&f.estates, "home/garden", false).unwrap_err();
+        assert!(
+            matches!(err, EstateError::Guard(ref msg) if msg == "home/garden: prepare failed: boom | line two | line three"),
+            "{err}"
+        );
+        // Only the read that found the dormant workspace; no close-get,
+        // no close, no create, no start.
+        assert_eq!(f.fake.call_count(), 1);
+        assert!(
+            ownership::is_ours("w1"),
+            "the workspace must not be forgotten"
+        );
+    }
+
+    #[test]
     fn fresh_with_no_recorded_conversation_names_nothing_retired() {
         let f = make_fixture("claude");
         f.fake.set_response(0, empty_list(), 0);
@@ -1683,6 +1969,74 @@ mod tests {
         assert!(lines[0].ends_with(" old-sid"), "{lines:?}");
         assert!(!ownership::is_ours("w1"));
         assert!(ownership::is_ours("w9"));
+    }
+
+    #[test]
+    fn stop_running_prepare_success_runs_before_the_close_and_the_create() {
+        let mut f = make_fixture("claude");
+        continuity::append(&f.cdir, "old-sid").unwrap();
+        ownership::record("home/garden", "w1").unwrap();
+        let marker = f._tmp.path().join("marker");
+        let script = write_pwd_marker_script(f._tmp.path(), &marker);
+        set_prepare(&mut f, &[script.to_str().unwrap()]);
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "idle", "pane_count": 1}
+            ]}}"#,
+            0,
+        );
+        f.fake.set_response(
+            1,
+            r#"{"result": {"workspace": {"label": "home/garden", "agent_status": "idle", "pane_count": 1}}}"#,
+            0,
+        );
+        f.fake.set_response(2, r#"{"result": {}}"#, 0);
+        f.fake.set_response(3, CREATE_OK, 0);
+        f.fake.set_response(4, r#"{"result": {}}"#, 0);
+
+        let result = fresh_with_ids_stop_running(&f.estates, "home/garden").unwrap();
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(f.fake.call_count(), 5);
+        // The script's own `pwd` resolves any symlink in the OS temp
+        // dir (`/var` -> `/private/var` on macOS); canonicalize the
+        // expected side the same way before comparing.
+        let workdir = std::fs::canonicalize(f._tmp.path().join("home")).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap().trim(),
+            workdir.to_str().unwrap()
+        );
+        assert_eq!(progress::logged_messages()[1], "home/garden: prepare ok");
+        assert_eq!(
+            progress::logged_messages()[2],
+            "home/garden: closing w1, stopping its agent to start a fresh conversation"
+        );
+    }
+
+    #[test]
+    fn stop_running_prepare_failure_refuses_before_any_close_or_create() {
+        let mut f = make_fixture("claude");
+        continuity::append(&f.cdir, "old-sid").unwrap();
+        ownership::record("home/garden", "w1").unwrap();
+        let script = write_failing_script(f._tmp.path(), &[]);
+        set_prepare(&mut f, &[script.to_str().unwrap()]);
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "idle", "pane_count": 1}
+            ]}}"#,
+            0,
+        );
+
+        let err = fresh_with_ids_stop_running(&f.estates, "home/garden").unwrap_err();
+        // No stderr and no stdout at all: the exit status is the only
+        // detail left to name.
+        assert!(
+            matches!(err, EstateError::Guard(ref msg) if msg.starts_with("home/garden: prepare failed: exit status")),
+            "{err}"
+        );
+        assert_eq!(f.fake.call_count(), 1);
+        assert!(ownership::is_ours("w1"));
     }
 
     #[test]

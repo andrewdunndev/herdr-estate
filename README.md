@@ -62,9 +62,14 @@ root = "~/estates/home"
 
 Each campaign is a directory under `campaigns/` holding a
 `campaign.md`, whose YAML frontmatter overrides the agent kind and its
-flags, and adds `paths`. The agent works from the estate root, with
-the address in `HERDR_ESTATE_ADDRESS`.
+flags, and adds `paths`. A `paths` entry that doesn't exist is skipped,
+with a warning, rather than passed on. The agent works from the estate
+root, with the address in `HERDR_ESTATE_ADDRESS`.
 [examples/](examples/) is an annotated estate.
+
+An estate's optional `prepare` runs an argv command, no shell, in the
+campaign's workdir before every create; a non-zero exit refuses the
+launch and creates nothing.
 
 ## Worktrees
 

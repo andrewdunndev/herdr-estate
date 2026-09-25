@@ -6,10 +6,14 @@ paths = ["~/code"]             # extra directories, added before each campaign's
 prompts = ["prompts/base.md"]  # joined in order, appended to claude's system
                                 # prompt (other kinds get no mapped flags)
 env = { }                      # exported into every workspace
+# prepare = ["~/bin/prepare.sh", "--check"]  # argv, no shell; runs in the
+                                # workdir before every create; a non-zero
+                                # exit refuses the launch
 
 # In root, paths and prompts, ~ and $VAR expand first; a relative
 # paths or prompts entry then resolves against root. In an env value,
 # {address} becomes the campaign's address, e.g. "owner: {address}".
+# A paths entry that doesn't exist on disk is skipped, with a warning.
 
 [estate.home.claude]
 remote-control = true          # default for every campaign in this estate;
