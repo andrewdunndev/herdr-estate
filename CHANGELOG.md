@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.2.0 - 2026-09-24
+
 - An estate row's `prepare` runs an argv command, no shell, in the
   campaign's workdir before the workspace is closed or created; a
   non-zero exit or a spawn failure refuses the launch and leaves a
