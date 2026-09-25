@@ -122,9 +122,11 @@ fn scalar_non_empty_str(s: &Scalar) -> Option<&str> {
 
 /// The estate row's optional `prepare` command: a non-empty array of
 /// non-empty strings, argv form, no shell. Each element gets the same
-/// leading-`~/` expansion `root` and `paths` get, so a command can name
-/// a script under the operator's home directory. `None` when the row
-/// carries no `prepare` key at all; a named `EstateError::Config`
+/// `~` and `$VAR` expansion `root` and `paths` get, so a command can
+/// name a script under the operator's home directory or reference an
+/// environment variable; a shell script's own variable of the same name
+/// is pre-empted before the child ever sees the argv. `None` when the
+/// row carries no `prepare` key at all; a named `EstateError::Config`
 /// otherwise, checked at resolve time so a broken estate never reaches
 /// `open_workspace`.
 fn estate_prepare(

@@ -90,7 +90,7 @@ fn resume_dry_run_prints_the_plan_and_masks_estate_env() {
     write_estate_toml(
         &config_dir,
         &format!(
-            "[estate.home]\nroot = {:?}\n[estate.home.env]\nSECRET_TOKEN = \"sk-do-not-print-me\"\n",
+            "[estate.home]\nroot = {:?}\nprepare = [\"/bin/true\", \"--check\"]\n[estate.home.env]\nSECRET_TOKEN = \"sk-do-not-print-me\"\n",
             root.to_string_lossy()
         ),
     );
@@ -114,6 +114,7 @@ fn resume_dry_run_prints_the_plan_and_masks_estate_env() {
     let text = stdout(&out);
     assert!(!text.contains("sk-do-not-print-me"));
     assert!(text.contains("SECRET_TOKEN=<from estates.toml>"));
+    assert!(text.contains("would prepare:"));
     assert!(text.contains("would create:"));
     assert!(text.contains("would start:"));
     assert_eq!(fake.call_count(), 1);

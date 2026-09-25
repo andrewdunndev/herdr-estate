@@ -3,8 +3,9 @@
 ## Unreleased
 
 - An estate row's `prepare` runs an argv command, no shell, in the
-  campaign's workdir before every create; a non-zero exit or a spawn
-  failure refuses the launch and creates nothing.
+  campaign's workdir before the workspace is closed or created; a
+  non-zero exit or a spawn failure refuses the launch and leaves a
+  running workspace untouched.
 - A `paths` entry that doesn't exist on disk is skipped, with a
   warning, instead of being passed on to the agent.
 

@@ -68,8 +68,9 @@ root, with the address in `HERDR_ESTATE_ADDRESS`.
 [examples/](examples/) is an annotated estate.
 
 An estate's optional `prepare` runs an argv command, no shell, in the
-campaign's workdir before every create; a non-zero exit refuses the
-launch and creates nothing.
+campaign's workdir before the workspace is closed or created; a
+non-zero exit refuses the launch and leaves a running workspace
+untouched.
 
 ## Worktrees
 

@@ -392,7 +392,13 @@ fn run_prepare(campaign: &Campaign, address: &str, argv: &[String]) -> Result<()
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output()
-        .map_err(|e| EstateError::Guard(format!("{address}: prepare failed: {e}")))?;
+        .map_err(|e| {
+            EstateError::Guard(format!(
+                "{address}: prepare failed to run {} in {}: {e}",
+                argv[0],
+                campaign.workdir.display()
+            ))
+        })?;
     if !output.status.success() {
         return Err(EstateError::Guard(format!(
             "{address}: prepare failed: {}",

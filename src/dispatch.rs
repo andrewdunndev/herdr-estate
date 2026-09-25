@@ -248,6 +248,10 @@ mod tests {
     #[test]
     fn live_row_genuinely_alive_never_runs_prepare() {
         let mut f = make_fixture();
+        // The campaign must actually resolve, or a resolve failure
+        // masks whatever the focus-only path does with prepare instead
+        // of proving it never runs.
+        f.campaign("garden");
         // A binary that doesn't exist: if this focus-only path ran it,
         // the run would fail right here.
         if let Some(toml::Value::Table(row)) = f.estates.get_mut("home") {
