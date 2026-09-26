@@ -18,8 +18,10 @@
 
 use std::time::Duration;
 
+use crate::doubleopen;
 use crate::errors::EstateError;
 use crate::herdrcli;
+use crate::ownership;
 use crate::paths::non_empty_env;
 use crate::picker::core::{Outcome, RowState};
 use crate::picker::shell::PLUGIN_ID;
@@ -153,6 +155,34 @@ pub fn self_hosted<'a>(
     }
 }
 
+/// A shell `resume` or `fresh` run from a pane inside the workspace it
+/// would close ends partway the same way the popup did, so it is handed
+/// to herdr too: `Some` with the run's result when this process runs in
+/// a pane (`$HERDR_WORKSPACE_ID`, not a plugin action or pane) of the
+/// live, owned workspace `address` names and that workspace's agent has
+/// exited. `None` leaves the verb to run here, where every other case
+/// either closes some other workspace or refuses before any close.
+pub fn shell_hand_off(action: RowAction, address: &str) -> Result<Option<bool>, EstateError> {
+    if non_empty_env("HERDR_PLUGIN_ACTION_ID").is_some()
+        || non_empty_env("HERDR_PLUGIN_ENTRYPOINT_ID").is_some()
+    {
+        return Ok(None);
+    }
+    let Some(own) = non_empty_env("HERDR_WORKSPACE_ID") else {
+        return Ok(None);
+    };
+    let Some(ws) = doubleopen::live_workspace(address)? else {
+        return Ok(None);
+    };
+    if ws.workspace_id != own
+        || doubleopen::workspace_alive(&ws)
+        || !ownership::is_ours(&ws.workspace_id)
+    {
+        return Ok(None);
+    }
+    hand_off(action, address, &own).map(Some)
+}
+
 /// Invoke `action`'s manifest action for `address`, whose workspace is
 /// `workspace_id`, and wait for herdr to finish running it. The
 /// invocation goes over the API socket: `herdr plugin action invoke`
@@ -164,7 +194,7 @@ pub fn hand_off(action: RowAction, address: &str, workspace_id: &str) -> Result<
     let plugin_id = non_empty_env("HERDR_PLUGIN_ID").unwrap_or_else(|| PLUGIN_ID.to_string());
     let action_id = action.action_id();
     progress::step(&format!(
-        "{address}: this popup is in the workspace it may close, handing off to herdr action {action_id}"
+        "{address}: this process is in the workspace it may close, handing off to herdr action {action_id}"
     ));
     let invoked = herdrcli::call_api(
         "plugin.action.invoke",
@@ -634,6 +664,107 @@ mod tests {
             matches!(&err, EstateError::Protocol(m) if m.contains("plugin action not found")),
             "{err}"
         );
+        assert_eq!(fake.call_count(), 0);
+    }
+
+    fn shell_in(workspace: &str, state: &TempDir, fake: &FakeHerdr) -> EnvGuard {
+        EnvGuard::new(
+            &[
+                ("HERDR_WORKSPACE_ID", workspace),
+                ("HERDR_BIN_PATH", fake.bin_path().to_str().unwrap()),
+                ("HERDR_PLUGIN_STATE_DIR", state.path().to_str().unwrap()),
+            ],
+            &[
+                "HERDR_PLUGIN_ACTION_ID",
+                "HERDR_PLUGIN_ENTRYPOINT_ID",
+                "HERDR_SOCKET_PATH",
+            ],
+        )
+    }
+
+    fn listing(status: &str) -> String {
+        format!(
+            r#"{{"result": {{"workspaces": [
+                {{"workspace_id": "w2", "label": "home/garden", "agent_status": "{status}", "pane_count": 1}}
+            ]}}}}"#
+        )
+    }
+
+    #[test]
+    fn a_shell_verb_in_its_own_exited_workspace_is_handed_to_herdr() {
+        let d = TempDir::new();
+        let fake = FakeHerdr::new();
+        let (socket, served) = fake_api(INVOKED);
+        let _g = shell_in("w2", &d, &fake);
+        std::env::set_var("HERDR_SOCKET_PATH", &socket);
+        crate::ownership::record("home/garden", "w2").unwrap();
+        fake.set_response(0, &listing("unknown"), 0);
+        fake.set_response(1, &log_list("succeeded", "0", ""), 0);
+
+        assert_eq!(
+            shell_hand_off(RowAction::Fresh, "home/garden").unwrap(),
+            Some(true)
+        );
+        let request: serde_json::Value = serde_json::from_str(&served.join().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&socket);
+        assert_eq!(request["params"]["action_id"], "dispatch-fresh");
+        assert_eq!(
+            request["params"]["context"],
+            serde_json::json!({"workspace_id": "w2", "workspace_label": "home/garden"})
+        );
+    }
+
+    #[test]
+    fn a_shell_verb_that_would_close_nothing_under_itself_runs_here() {
+        for (own, status, ours) in [
+            ("w9", "unknown", true),
+            ("w2", "idle", true),
+            ("w2", "unknown", false),
+        ] {
+            let d = TempDir::new();
+            let fake = FakeHerdr::new();
+            let _g = shell_in(own, &d, &fake);
+            if ours {
+                crate::ownership::record("home/garden", "w2").unwrap();
+            }
+            fake.set_response(0, &listing(status), 0);
+            assert_eq!(
+                shell_hand_off(RowAction::Open, "home/garden").unwrap(),
+                None,
+                "{own} {status} {ours}"
+            );
+            assert_eq!(fake.call_count(), 1);
+        }
+    }
+
+    #[test]
+    fn a_verb_outside_any_pane_or_run_as_an_action_never_reads_herdr_to_decide() {
+        let d = TempDir::new();
+        let fake = FakeHerdr::new();
+        {
+            let _g = EnvGuard::new(
+                &[
+                    ("HERDR_BIN_PATH", fake.bin_path().to_str().unwrap()),
+                    ("HERDR_PLUGIN_STATE_DIR", d.path().to_str().unwrap()),
+                ],
+                &[
+                    "HERDR_WORKSPACE_ID",
+                    "HERDR_PLUGIN_ACTION_ID",
+                    "HERDR_PLUGIN_ENTRYPOINT_ID",
+                ],
+            );
+            assert_eq!(
+                shell_hand_off(RowAction::Fresh, "home/garden").unwrap(),
+                None
+            );
+        }
+        let _g = shell_in("w2", &d, &fake);
+        std::env::set_var("HERDR_PLUGIN_ACTION_ID", "fresh");
+        assert_eq!(
+            shell_hand_off(RowAction::Fresh, "home/garden").unwrap(),
+            None
+        );
+        std::env::remove_var("HERDR_PLUGIN_ACTION_ID");
         assert_eq!(fake.call_count(), 0);
     }
 

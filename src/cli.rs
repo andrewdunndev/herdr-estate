@@ -241,11 +241,21 @@ fn dispatch(cmd: Command) -> Result<i32, EstateError> {
         Command::Resume { address, dry_run } => {
             let estates = config::load_estates(None)?;
             let addr = resolve_address(address, dry_run)?;
+            if !dry_run {
+                if let Some(ok) = detach::shell_hand_off(RowAction::Open, &addr)? {
+                    return Ok(if ok { 0 } else { 1 });
+                }
+            }
             verbs::resume(&estates, &addr, dry_run)
         }
         Command::Fresh { address, dry_run } => {
             let estates = config::load_estates(None)?;
             let addr = resolve_address(address, dry_run)?;
+            if !dry_run {
+                if let Some(ok) = detach::shell_hand_off(RowAction::Fresh, &addr)? {
+                    return Ok(if ok { 0 } else { 1 });
+                }
+            }
             verbs::fresh(&estates, &addr, dry_run)
         }
         Command::List => {

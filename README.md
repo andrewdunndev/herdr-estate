@@ -103,7 +103,9 @@ so the agent can still reach `log.md`.
 - `create <address> --brief <text>`: write a new campaign's
   `campaign.md` and `log.md`, uncommitted.
 
-With no address, the current workspace's label is used. `--dry-run`
+With no address, the current workspace's label is used. Run in the
+campaign's own workspace after its agent exits, `resume` and `fresh`
+hand the run to herdr, since closing that workspace would end them. `--dry-run`
 prints the plan and changes nothing; it needs an address. `--help`
 lists the verbs and their flags. Progress and
 the run log: [docs/events.md](docs/events.md).

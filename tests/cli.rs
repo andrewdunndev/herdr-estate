@@ -559,17 +559,21 @@ fn address_derived_from_herdr_workspace_id_when_omitted() {
         r#"{"result": {"workspace": {"label": "home/garden"}}}"#,
         0,
     );
-    f.fake
-        .set_response(1, r#"{"result": {"workspaces": []}}"#, 0);
+    // Read once to decide whether this pane's own workspace is the one
+    // the run would close, and once by the verb's guard.
+    for i in [1, 2] {
+        f.fake
+            .set_response(i, r#"{"result": {"workspaces": []}}"#, 0);
+    }
     f.fake.set_response(
-        2,
+        3,
         r#"{"result": {
             "workspace": {"workspace_id": "w9", "label": "home/garden"},
             "root_pane": {"pane_id": "p1"}
         }}"#,
         0,
     );
-    f.fake.set_response(3, r#"{"result": {}}"#, 0);
+    f.fake.set_response(4, r#"{"result": {}}"#, 0);
 
     let out = run(&f, &["fresh"], &[("HERDR_WORKSPACE_ID", "w1")]);
     assert!(out.status.success(), "{}", stderr(&out));

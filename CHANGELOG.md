@@ -13,6 +13,11 @@
   still holds in the popup, as does herdr's own error for a run that
   never started. The popup waits on the run for at most 120 seconds,
   then names its plugin log entry.
+- `resume` or `fresh` typed in the campaign's own workspace once its
+  agent has exited no longer closes that workspace and stops, taking
+  the shell running it down with it. It hands the run to herdr through
+  the same `dispatch-*` actions, and the replacement is created,
+  started and focused.
 - Two launches of one address at once, from two popups or a popup and
   a shell, no longer both create a workspace under its label. A launch
   takes a lock for its campaign in the state dir, and the second one
