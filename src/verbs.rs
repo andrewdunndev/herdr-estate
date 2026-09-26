@@ -51,6 +51,10 @@ pub const PREPARE_TIMEOUT_SECS: u64 = 60;
 /// process it left running in the background can hold the pipes open
 /// for as long as it runs.
 const PREPARE_PIPE_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// How long a timed-out prepare's process group has between SIGTERM and
+/// SIGKILL.
+const PREPARE_KILL_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 pub const PANE_PLACEHOLDER: &str = "<PANE_ID>";
 
 /// Why `open_workspace` closes the workspace it replaces, which sets
@@ -438,9 +442,10 @@ fn run_prepare(campaign: &Campaign, address: &str, argv: &[String]) -> Result<()
 
 /// `run_prepare` with its deadline as a parameter, for the tests. Both
 /// pipes are drained on their own threads while this waits, so a
-/// prepare that writes more than a pipe holds never stalls on it. Only
-/// the command itself is killed at the deadline; a process it started
-/// and left running is its own. Such a process can hold the pipes open
+/// prepare that writes more than a pipe holds never stalls on it. It
+/// runs as the leader of its own process group, and the whole group is
+/// killed at the deadline. A process it leaves running after a normal
+/// exit is its own, and can hold the pipes open
 /// after the command exits, so their output is waited on for at most
 /// `PREPARE_PIPE_GRACE` (never past the deadline) and reads as empty
 /// after that, which the progress line or refusal says.
@@ -451,8 +456,10 @@ fn run_prepare_within(
     timeout: std::time::Duration,
 ) -> Result<(), EstateError> {
     use std::io::Read;
+    use std::os::unix::process::CommandExt;
     let mut child = std::process::Command::new(&argv[0])
         .args(&argv[1..])
+        .process_group(0)
         .current_dir(&campaign.workdir)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -499,8 +506,7 @@ fn run_prepare_within(
             break status;
         }
         if started.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_process_group(&mut child);
             return Err(EstateError::Guard(format!(
                 "{address}: prepare timed out after {}s",
                 timeout.as_secs()
@@ -538,6 +544,32 @@ fn run_prepare_within(
     }
     progress::step(&format!("{address}: prepare ok{held_note}"));
     Ok(())
+}
+
+/// Ends `child`, spawned as the leader of its own process group, and
+/// everything it started in that group: SIGTERM to the group through the
+/// POSIX `kill` utility, then SIGKILL once `PREPARE_KILL_GRACE` has
+/// passed or the leader has exited, then a wait so no zombie is left.
+fn kill_process_group(child: &mut std::process::Child) {
+    let group = format!("-{}", child.id());
+    let signal = |name: &str| {
+        let _ = std::process::Command::new("kill")
+            .args(["-s", name, "--", &group])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    };
+    signal("TERM");
+    let grace_ends = std::time::Instant::now() + PREPARE_KILL_GRACE;
+    while std::time::Instant::now() < grace_ends {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    signal("KILL");
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// The first 3 non-empty lines of `output`'s stderr, or its stdout when
@@ -1762,6 +1794,44 @@ mod tests {
             matches!(&err, EstateError::Guard(m) if m.contains("exit status: 3") && m.ends_with("held open by a process it left running)")),
             "{err}"
         );
+    }
+
+    #[test]
+    fn a_prepare_past_its_deadline_takes_what_it_started_down_with_it() {
+        let d = crate::test_support::TempDir::new();
+        let _g = crate::test_support::EnvGuard::set(&[(
+            "HERDR_PLUGIN_STATE_DIR",
+            d.path().to_str().unwrap(),
+        )]);
+        let campaign = prepare_campaign(d.path());
+        let pidfile = d.path().join("sleeper.pid");
+        let script = format!("sleep 300 & echo $! > {}; wait", pidfile.display());
+        let err = run_prepare_within(
+            &campaign,
+            "home/garden",
+            &argv_of(&["sh", "-c", &script]),
+            std::time::Duration::from_millis(500),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, EstateError::Guard(m) if m.contains("timed out")),
+            "{err}"
+        );
+        let pid: u32 = std::fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let gone = (0..60).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            !crate::doubleopen::pid_alive(pid)
+        });
+        if !gone {
+            let _ = std::process::Command::new("kill")
+                .arg(pid.to_string())
+                .status();
+        }
+        assert!(gone, "the backgrounded sleeper {pid} outlived the timeout");
     }
 
     #[test]
