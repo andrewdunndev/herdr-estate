@@ -89,10 +89,24 @@ pub fn expand<S: AsRef<str>>(p: S) -> PathBuf {
     expand_user(&expand_vars(p.as_ref()))
 }
 
-/// Where this plugin's own runtime files (assembled prompts, worktree
-/// checkouts) live: `$HERDR_PLUGIN_STATE_DIR` when herdr sets it (running
-/// as a plugin action), else a plain XDG-ish fallback for a bare shell
-/// invocation.
+/// herdr's own app-dir name and this plugin's id, mirrored from herdr
+/// v0.9.1 so a bare shell invocation lands on the exact directory herdr
+/// itself would hand this plugin via `HERDR_PLUGIN_STATE_DIR`: herdr's
+/// `state_dir()` is `$XDG_STATE_HOME/herdr` or `$HOME/.local/state/herdr`
+/// (herdr `src/config/io.rs:37`, non-Windows fallback at `:88`), and
+/// `plugin_state_dir(id)` joins `plugins/<id>` onto that (herdr
+/// `src/plugin_paths.rs:21-25`). `"herdr-estate"` passes herdr's path-
+/// component sanitizer unchanged (lowercase ASCII and `-` only), so no
+/// sanitizing is needed here.
+const HERDR_APP_DIR_NAME: &str = "herdr";
+const PLUGIN_ID: &str = "herdr-estate";
+
+/// Where this plugin's own runtime files (ownership record, `events.log`,
+/// assembled prompts, worktree checkouts) live: `$HERDR_PLUGIN_STATE_DIR`
+/// when herdr sets it (running as a plugin action), else the same
+/// `<state root>/herdr/plugins/herdr-estate` path herdr would set that
+/// variable to, so a bare shell invocation and a herdr-launched one share
+/// one directory.
 pub fn state_dir() -> PathBuf {
     if let Some(d) = non_empty_env("HERDR_PLUGIN_STATE_DIR") {
         return PathBuf::from(d);
@@ -101,7 +115,9 @@ pub fn state_dir() -> PathBuf {
         Some(x) => PathBuf::from(x),
         None => home_dir().join(".local").join("state"),
     };
-    base.join("herdr-estate")
+    base.join(HERDR_APP_DIR_NAME)
+        .join("plugins")
+        .join(PLUGIN_ID)
 }
 
 #[cfg(test)]
@@ -180,7 +196,7 @@ mod tests {
         );
         assert_eq!(
             state_dir(),
-            PathBuf::from("/tmp/xdg-state").join("herdr-estate")
+            PathBuf::from("/tmp/xdg-state/herdr/plugins/herdr-estate")
         );
     }
 
@@ -192,7 +208,7 @@ mod tests {
         );
         assert_eq!(
             state_dir(),
-            PathBuf::from("/tmp/fake-home/.local/state/herdr-estate")
+            PathBuf::from("/tmp/fake-home/.local/state/herdr/plugins/herdr-estate")
         );
     }
 
@@ -204,7 +220,7 @@ mod tests {
         );
         assert_eq!(
             state_dir(),
-            PathBuf::from("/tmp/fake-home/.local/state/herdr-estate")
+            PathBuf::from("/tmp/fake-home/.local/state/herdr/plugins/herdr-estate")
         );
     }
 }

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- A bare shell invocation now resolves the state dir to the same
+  `.../herdr/plugins/herdr-estate` directory herdr itself hands the
+  picker, instead of a separate `.../herdr-estate`. The picker no
+  longer refuses a workspace the CLI launched. An older
+  `~/.local/state/herdr-estate` from before this fix isn't migrated;
+  merge its `owned.json` into the new dir by hand, or delete it.
+
 ## v0.2.0 - 2026-09-24
 
 - An estate row's `prepare` runs an argv command, no shell, in the

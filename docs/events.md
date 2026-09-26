@@ -44,15 +44,13 @@ list`; the picker popup's output is gone once it closes. `events.log`
 covers every launch path, one timestamped line per step.
 
 The state dir is `$HERDR_PLUGIN_STATE_DIR` when herdr sets it (an
-action, or the picker pane), otherwise `$XDG_STATE_HOME/herdr-estate`
-or `~/.local/state/herdr-estate`. It also holds the ownership record
-(`owned.json`), each campaign's assembled prompt
+action, or the picker pane), otherwise `$XDG_STATE_HOME/herdr/plugins/herdr-estate`
+or `~/.local/state/herdr/plugins/herdr-estate` — the same directory
+herdr itself would set that variable to, so a shell invocation and a
+herdr-launched one land in the same place. It also holds the ownership
+record (`owned.json`), each campaign's assembled prompt
 (`<estate>-<campaign>.prompt.md`) and the worktrees the verbs create
-(under `worktrees/`). Because the ownership record lives here too, a
-workspace opened from a plain shell is recorded in the shell's state
-dir, and one opened through herdr in herdr's; each then reads the
-other's workspace as one it did not create, and refuses to close it.
-The log is created readable by you only, and a failed herdr call's
+(under `worktrees/`). The log is created readable by you only, and a failed herdr call's
 message masks every estate `env` value the way a `--dry-run` plan
 does, on stderr and in the log alike. The log only grows; delete it
 whenever.

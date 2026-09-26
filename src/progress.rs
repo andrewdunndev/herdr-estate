@@ -23,8 +23,8 @@ use crate::paths::{non_empty_env, state_dir};
 pub const LOG_FILE_NAME: &str = "events.log";
 
 /// `events.log` under `paths::state_dir()`: herdr's per-plugin state dir
-/// when herdr ran this binary, `~/.local/state/herdr-estate` from a shell
-/// — the same split the ownership record has.
+/// whether herdr ran this binary or a shell did — both resolve to the
+/// same directory.
 pub fn log_path() -> PathBuf {
     state_dir().join(LOG_FILE_NAME)
 }

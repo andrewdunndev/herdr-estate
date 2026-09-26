@@ -8,9 +8,10 @@
 //! closing, since ids are reused across a server restart).
 //!
 //! Stored as one JSON object at `$HERDR_PLUGIN_STATE_DIR/owned.json`
-//! (fallback: `paths::state_dir()`'s own fallback), written atomically
-//! (temp file + rename) so a crash mid-write never corrupts it. A
-//! missing or corrupt file reads as "nothing owned", never an error.
+//! (fallback: `paths::state_dir()`'s own fallback, the same directory
+//! herdr itself would set that variable to), written atomically (temp
+//! file + rename) so a crash mid-write never corrupts it. A missing or
+//! corrupt file reads as "nothing owned", never an error.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -175,6 +176,29 @@ mod tests {
     fn forget_unrecorded_id_is_a_no_op() {
         let (_d, _g) = isolated();
         forget("never-recorded").unwrap(); // must not error
+    }
+
+    #[test]
+    fn cli_recorded_entry_is_visible_to_the_pickers_dir_resolution() {
+        // A workspace created by a bare `herdr-estate` shell invocation
+        // (no HERDR_PLUGIN_STATE_DIR) must be visible when herdr later
+        // reads ownership through the picker, which always runs with
+        // HERDR_PLUGIN_STATE_DIR set to the dir herdr computed for this
+        // plugin id. Before the fix these were two different files.
+        let home = TempDir::new();
+        {
+            let _g = EnvGuard::new(
+                &[("HOME", home.path().to_str().expect("utf8 path"))],
+                &["HERDR_PLUGIN_STATE_DIR", "XDG_STATE_HOME"],
+            );
+            record("home/garden", "w1").unwrap();
+        }
+        let picker_dir = home.path().join(".local/state/herdr/plugins/herdr-estate");
+        let _g = EnvGuard::set(&[(
+            "HERDR_PLUGIN_STATE_DIR",
+            picker_dir.to_str().expect("utf8 path"),
+        )]);
+        assert!(is_ours("w1"));
     }
 
     #[test]
