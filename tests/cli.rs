@@ -600,6 +600,77 @@ fn concurrent_launches_of_different_addresses_keep_every_ownership_record() {
 }
 
 #[test]
+fn a_launch_killed_while_holding_the_lock_frees_it_at_once() {
+    let (f, root) = fixture();
+    make_campaign(&root, "garden", "---\n---\n");
+    let base = root.parent().unwrap().to_path_buf();
+    let hold = base.join("hold");
+    let started = base.join("started");
+    let sleeper = base.join("sleeper.pid");
+    std::fs::write(&hold, "").unwrap();
+    let prepare = format!(
+        "if [ -f {hold:?} ]; then echo $$ > {sleeper:?}; touch {started:?}; exec sleep 30; fi"
+    );
+    write_estate_toml(
+        &f.config_dir,
+        &format!(
+            "[estate.home]\nroot = {:?}\nprepare = [\"/bin/sh\", \"-c\", {prepare:?}]\n",
+            root.to_string_lossy()
+        ),
+    );
+    let fake_dir = base.join("stateful-herdr");
+    std::fs::create_dir_all(&fake_dir).unwrap();
+    let script = fake_dir.join("herdr");
+    std::fs::write(&script, STATEFUL_HERDR).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let launch = || {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_herdr-estate"));
+        command
+            .args(["fresh", "home/garden"])
+            .env_clear()
+            .env("HOME", &f.home)
+            .env("HERDR_PLUGIN_CONFIG_DIR", &f.config_dir)
+            .env("HERDR_PLUGIN_STATE_DIR", &f.state_dir)
+            .env("HERDR_BIN_PATH", &script)
+            .env("PATH", "/usr/bin:/bin")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        command
+    };
+    let mut holder = launch().spawn().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !started.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(started.exists(), "the first launch never reached prepare");
+    let refused = launch().output().unwrap();
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("another herdr-estate run (pid"),
+        "{}",
+        stderr(&refused)
+    );
+
+    holder.kill().unwrap();
+    holder.wait().unwrap();
+    if let Ok(pid) = std::fs::read_to_string(&sleeper) {
+        let _ = Command::new("kill").arg(pid.trim()).status();
+    }
+    std::fs::remove_file(&hold).unwrap();
+    let at = std::time::Instant::now();
+    let out = launch().output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        at.elapsed() < std::time::Duration::from_secs(5),
+        "{:?}",
+        at.elapsed()
+    );
+}
+
+#[test]
 fn address_derived_from_herdr_workspace_id_when_omitted() {
     let (f, root) = fixture();
     make_campaign(&root, "garden", "---\n---\n");

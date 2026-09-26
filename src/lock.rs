@@ -1,23 +1,17 @@
+use std::fs::{File, TryLockError};
 use std::io::Write;
-use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use crate::doubleopen::pid_alive;
 use crate::errors::EstateError;
 use crate::paths::state_dir;
 
-const STALE_AFTER: Duration = Duration::from_secs(120);
 const OWNED_WAIT: Duration = Duration::from_secs(10);
+const OWNED_POLL: Duration = Duration::from_millis(50);
 
 #[derive(Debug)]
 pub struct FileLock {
-    path: PathBuf,
-}
-
-impl Drop for FileLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
+    _file: File,
 }
 
 fn lock_path(address: &str) -> PathBuf {
@@ -25,66 +19,41 @@ fn lock_path(address: &str) -> PathBuf {
     state_dir().join("locks").join(format!("{name}.lock"))
 }
 
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+fn owned_lock_path() -> PathBuf {
+    state_dir().join("owned.lock")
 }
 
-fn holder(contents: &str) -> Option<(u32, u64)> {
-    let mut fields = contents.split_whitespace();
-    let pid = fields.next()?.parse().ok()?;
-    let since = fields.next()?.parse().ok()?;
-    Some((pid, since))
-}
-
-fn is_stale(contents: &str) -> bool {
-    match holder(contents) {
-        Some((pid, since)) => {
-            !pid_alive(pid) || now_secs().saturating_sub(since) > STALE_AFTER.as_secs()
-        }
-        None => true,
-    }
-}
-
-fn take(path: &std::path::Path) -> Result<Result<FileLock, u32>, EstateError> {
+fn try_take(path: &Path) -> Result<Option<FileLock>, EstateError> {
+    let failed =
+        |e: std::io::Error| EstateError::Config(format!("could not lock {}: {e}", path.display()));
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)
-            .map_err(|e| EstateError::Config(format!("could not create {}: {e}", dir.display())))?;
+        std::fs::create_dir_all(dir).map_err(failed)?;
     }
-    let mut holder_pid = 0;
-    for _ in 0..2 {
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-        {
-            Ok(mut f) => {
-                let _ = writeln!(f, "{} {}", std::process::id(), now_secs());
-                return Ok(Ok(FileLock {
-                    path: path.to_path_buf(),
-                }));
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(failed)?;
+    match file.try_lock() {
+        Ok(()) => {
+            if file.set_len(0).is_ok() {
+                let _ = write!(file, "{}", std::process::id());
             }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                let contents = std::fs::read_to_string(path).unwrap_or_default();
-                if !is_stale(&contents) {
-                    holder_pid = holder(&contents).map(|(p, _)| p).unwrap_or(0);
-                    return Ok(Err(holder_pid));
-                }
-                if std::fs::read_to_string(path).unwrap_or_default() == contents {
-                    let _ = std::fs::remove_file(path);
-                }
-            }
-            Err(e) => {
-                return Err(EstateError::Config(format!(
-                    "could not create {}: {e}",
-                    path.display()
-                )))
-            }
+            Ok(Some(FileLock { _file: file }))
         }
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(TryLockError::Error(e)) => Err(failed(e)),
     }
-    Ok(Err(holder_pid))
+}
+
+fn holder(path: &Path) -> String {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .map(|pid| format!(" (pid {pid})"))
+        .unwrap_or_default()
 }
 
 pub fn acquire(address: &str) -> Result<FileLock, EstateError> {
@@ -93,26 +62,28 @@ pub fn acquire(address: &str) -> Result<FileLock, EstateError> {
         crate::paths::non_empty_env("HERDR_PLUGIN_STATE_DIR").is_some(),
         "lock::acquire reached with HERDR_PLUGIN_STATE_DIR unset"
     );
-    take(&lock_path(address))?.map_err(|pid| {
+    let path = lock_path(address);
+    try_take(&path)?.ok_or_else(|| {
         EstateError::Guard(format!(
-            "{address}: another herdr-estate run (pid {pid}) is opening this campaign; try again once it finishes"
+            "{address}: another herdr-estate run{} is opening this campaign; try again once it finishes",
+            holder(&path)
         ))
     })
 }
 
 pub fn hold_owned() -> std::io::Result<FileLock> {
-    let path = state_dir().join("owned.lock");
+    let path = owned_lock_path();
     let gives_up = std::time::Instant::now() + OWNED_WAIT;
     loop {
-        match take(&path) {
-            Ok(Ok(lock)) => return Ok(lock),
-            Ok(Err(_)) if std::time::Instant::now() < gives_up => {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Ok(Err(pid)) => {
+        match try_take(&path) {
+            Ok(Some(lock)) => return Ok(lock),
+            Ok(None) if std::time::Instant::now() < gives_up => std::thread::sleep(OWNED_POLL),
+            Ok(None) => {
                 return Err(std::io::Error::other(format!(
-                    "{} is held by pid {pid}",
-                    path.display()
+                    "{} is still held{} after {}s",
+                    path.display(),
+                    holder(&path),
+                    OWNED_WAIT.as_secs()
                 )))
             }
             Err(e) => return Err(std::io::Error::other(e.to_string())),
@@ -132,46 +103,51 @@ mod tests {
     }
 
     #[test]
-    fn a_held_lock_refuses_a_second_taker_and_is_released_on_drop() {
+    fn a_held_lock_refuses_a_second_taker_naming_its_pid_and_frees_on_drop() {
         let (_d, _g) = isolated();
         let held = acquire("home/garden").unwrap();
         let err = acquire("home/garden").unwrap_err();
         assert!(
-            matches!(&err, EstateError::Guard(m) if m.contains(&format!("pid {}", std::process::id()))),
+            matches!(&err, EstateError::Guard(m) if m.contains(&format!("(pid {})", std::process::id()))),
             "{err}"
         );
         assert!(acquire("home/attic").is_ok());
         drop(held);
         assert!(acquire("home/garden").is_ok());
-        assert!(!lock_path("home/garden").exists());
     }
 
     #[test]
-    fn a_lock_whose_holder_is_gone_or_too_old_is_taken_over() {
+    fn a_lock_file_left_behind_with_any_contents_is_taken_when_nobody_holds_it() {
         let (_d, _g) = isolated();
         let path = lock_path("home/garden");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let dead = std::process::Command::new("true").spawn().unwrap();
-        let dead_pid = dead.id();
-        let _ = dead.wait_with_output();
-        for contents in [
-            format!("{dead_pid} {}\n", now_secs()),
-            format!("{} {}\n", std::process::id(), now_secs() - 121),
-            "garbage".to_string(),
-        ] {
-            std::fs::write(&path, &contents).unwrap();
+        for contents in ["", "garbage", "1 2 3", "99999999"] {
+            std::fs::write(&path, contents).unwrap();
             let lock = acquire("home/garden").unwrap();
-            let now = std::fs::read_to_string(&path).unwrap();
-            assert!(
-                now.starts_with(&format!("{} ", std::process::id())),
-                "{contents:?}"
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                std::process::id().to_string()
             );
             drop(lock);
         }
     }
 
     #[test]
-    fn the_owned_lock_waits_for_its_holder_then_takes_over() {
+    fn a_refusal_whose_holder_wrote_no_pid_still_reads_cleanly() {
+        let (_d, _g) = isolated();
+        let path = lock_path("home/garden");
+        let held = acquire("home/garden").unwrap();
+        std::fs::write(&path, "").unwrap();
+        let err = acquire("home/garden").unwrap_err();
+        assert!(
+            matches!(&err, EstateError::Guard(m) if m.starts_with("home/garden: another herdr-estate run is opening")),
+            "{err}"
+        );
+        drop(held);
+    }
+
+    #[test]
+    fn the_owned_lock_waits_for_its_holder() {
         let (d, _g) = isolated();
         let held = hold_owned().unwrap();
         assert!(d.path().join("owned.lock").exists());

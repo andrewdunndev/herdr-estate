@@ -23,8 +23,8 @@
 - Two launches of one address at once, from two popups or a popup and
   a shell, no longer both create a workspace under its label. A launch
   takes a lock for its campaign in the state dir, and the second one
-  refuses, naming the first one's pid, until the first finishes. A lock
-  left by a run that died is taken over.
+  refuses, naming the first one's pid, until the first finishes. A run
+  that dies, even by SIGKILL, releases its lock with it.
 - Launches of different addresses at once no longer drop each other's
   records from `owned.json`. Every change to it holds `owned.lock`
   beside it, and a launch prunes only records that existed before its

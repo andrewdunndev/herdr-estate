@@ -133,12 +133,13 @@ mod tests {
     fn record_persists_to_disk_at_the_exact_filename() {
         let (d, _g) = isolated();
         record("home/garden", "w1").unwrap();
-        let names: Vec<String> = std::fs::read_dir(d.path())
+        let mut names: Vec<String> = std::fs::read_dir(d.path())
             .unwrap()
             .flatten()
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
-        assert_eq!(names, vec![FILE_NAME.to_string()]);
+        names.sort_unstable();
+        assert_eq!(names, vec![FILE_NAME.to_string(), "owned.lock".to_string()]);
         let on_disk = std::fs::read_to_string(d.path().join(FILE_NAME)).unwrap();
         let parsed: BTreeMap<String, String> = serde_json::from_str(&on_disk).unwrap();
         assert_eq!(parsed.get("w1"), Some(&"home/garden".to_string()));
