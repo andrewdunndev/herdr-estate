@@ -47,14 +47,34 @@ pub const AGENT_START_TIMEOUT_MS: &str = "30000";
 pub const PREPARE_TIMEOUT_SECS: u64 = 60;
 pub const PANE_PLACEHOLDER: &str = "<PANE_ID>";
 
-/// `open_workspace`'s closing progress line, for `resume`/`fresh`'s
-/// ordinary path: the workspace is dormant, its agent already gone.
-const CLOSE_REASON_EXITED: &str = "which herdr-estate opened and whose agent has exited";
+/// Why `open_workspace` closes the workspace it replaces, which sets
+/// both its progress line and what the close re-checks first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseMode {
+    /// `resume`/`fresh`'s ordinary path: the workspace is dormant, its
+    /// agent already gone.
+    Exited,
+    /// The picker's Ctrl-f second press: the agent is still attached,
+    /// idle or done, and this close is what stops it.
+    Stopping,
+}
 
-/// `open_workspace`'s closing progress line, for the picker's Ctrl-f
-/// second press: the agent is still attached, idle or done, and this
-/// close is what stops it.
-const CLOSE_REASON_STOPPING: &str = "stopping its agent to start a fresh conversation";
+impl CloseMode {
+    /// The closing progress line's reason.
+    fn reason(self) -> &'static str {
+        match self {
+            CloseMode::Exited => "which herdr-estate opened and whose agent has exited",
+            CloseMode::Stopping => "stopping its agent to start a fresh conversation",
+        }
+    }
+
+    /// Only a stop requires the agent to still be idle or done at the
+    /// close; the ordinary resume/fresh close never required that to
+    /// begin with.
+    fn requires_idle_or_done(self) -> bool {
+        self == CloseMode::Stopping
+    }
+}
 
 /// Emptied on every workspace create (`--env KEY=`), before the estate's
 /// own env pairs so a user who deliberately sets one of these in their
@@ -521,7 +541,7 @@ fn prepare_failure_detail(output: &std::process::Output) -> String {
 /// workdir) is validated before `ws` (an owned
 /// workspace, either non-alive or the idle/done one
 /// `check_replaceable_running_workspace` cleared) is closed with
-/// `close_reason` naming why in the progress line. Creates the
+/// `close_mode`'s reason in the progress line. Creates the
 /// replacement, validates the response, records ownership of the new
 /// workspace, and starts the agent. When `ws` is present but its close
 /// could not be confirmed, stops here with a guard error naming the
@@ -532,7 +552,7 @@ fn open_workspace(
     resolved: &Campaign,
     address: &str,
     ws: Option<Workspace>,
-    close_reason: &str,
+    close_mode: CloseMode,
     verb: Verb,
     conversation_id: &str,
 ) -> Result<(String, String), EstateError> {
@@ -553,15 +573,15 @@ fn open_workspace(
     }
     if let Some(ws) = ws {
         progress::step(&format!(
-            "{address}: closing {}, {close_reason}",
-            ws.workspace_id
+            "{address}: closing {}, {}",
+            ws.workspace_id,
+            close_mode.reason()
         ));
-        // Only the picker's Ctrl-f second press names its close reason
-        // this way; the ordinary resume/fresh close never requires the
-        // agent to still be idle or done, since it never required that
-        // to begin with.
-        let require_idle_or_done = close_reason == CLOSE_REASON_STOPPING;
-        match close_if_ours(&ws.workspace_id, address, require_idle_or_done)? {
+        match close_if_ours(
+            &ws.workspace_id,
+            address,
+            close_mode.requires_idle_or_done(),
+        )? {
             CloseOutcome::Closed => {
                 ownership::forget(&ws.workspace_id).map_err(|e| {
                     EstateError::Config(format!("could not update the ownership record: {e}"))
@@ -741,7 +761,7 @@ pub(crate) fn resume_with_ids(
         &campaign,
         address,
         ws,
-        CLOSE_REASON_EXITED,
+        CloseMode::Exited,
         Verb::Resume,
         &conversation_id,
     )?;
@@ -777,7 +797,7 @@ fn fresh_resolved(
 ) -> Result<VerbResult, EstateError> {
     let old_id = fresh_registry_guard(campaign, address)?;
     let ws = check_live_workspace(address)?;
-    fresh_open(campaign, address, old_id, ws, CLOSE_REASON_EXITED, dry_run)
+    fresh_open(campaign, address, old_id, ws, CloseMode::Exited, dry_run)
 }
 
 /// The picker's Ctrl-f second press: an idle or done agent, still
@@ -802,7 +822,7 @@ pub(crate) fn fresh_with_ids_stop_running(
         address,
         old_id,
         Some(ws),
-        CLOSE_REASON_STOPPING,
+        CloseMode::Stopping,
         false,
     )
 }
@@ -863,7 +883,7 @@ fn stop_registry_guard(
 
 /// The second half both `fresh_with_ids` and `fresh_with_ids_stop_running`
 /// share once they have decided `ws`: build the new conversation, print
-/// or run the plan, close `ws` (with `close_reason` in the progress
+/// or run the plan, close `ws` (with `close_mode`'s reason in the progress
 /// line) and recreate. `dry_run` is always `false` from the picker path,
 /// which has no dry-run concept of its own.
 fn fresh_open(
@@ -871,7 +891,7 @@ fn fresh_open(
     address: &str,
     old_id: Option<String>,
     ws: Option<Workspace>,
-    close_reason: &str,
+    close_mode: CloseMode,
     dry_run: bool,
 ) -> Result<VerbResult, EstateError> {
     let new_id = new_conversation_id()?;
@@ -904,7 +924,7 @@ fn fresh_open(
         short(&new_id)
     ));
     let (workspace_id, pane_id) =
-        open_workspace(campaign, address, ws, close_reason, Verb::Fresh, &new_id)?;
+        open_workspace(campaign, address, ws, close_mode, Verb::Fresh, &new_id)?;
     continuity::append(&campaign.dir, &new_id)
         .map_err(|e| EstateError::Config(format!("could not append to the continuity log: {e}")))?;
     println!(
@@ -1804,6 +1824,13 @@ mod tests {
         );
         assert!(resume(&f.estates, "home/garden", false).is_err());
         assert!(progress::logged_messages().is_empty());
+    }
+
+    #[test]
+    fn only_a_stop_requires_the_agent_idle_or_done_at_the_close() {
+        assert!(CloseMode::Stopping.requires_idle_or_done());
+        assert!(!CloseMode::Exited.requires_idle_or_done());
+        assert_ne!(CloseMode::Stopping.reason(), CloseMode::Exited.reason());
     }
 
     #[test]
