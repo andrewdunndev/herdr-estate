@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.2.2 - 2026-09-26
+
 - The picker no longer stops halfway when the row it acts on is the
   workspace it was opened from. Closing that workspace ended the popup
   and the run inside it, after the close and before the create, so
