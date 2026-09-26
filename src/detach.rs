@@ -167,7 +167,11 @@ const TESTED_HERDR: &str = "0.9.1";
 const MIN_PROTOCOL: u64 = 22;
 
 fn check_protocol() -> Result<String, EstateError> {
-    let pong = herdrcli::call_api("ping", serde_json::json!({}))?;
+    let pong = herdrcli::call_api("ping", serde_json::json!({})).map_err(|e| {
+        EstateError::Protocol(format!(
+            "{e}; the picker's hand-off needs protocol {MIN_PROTOCOL} (herdr {TESTED_HERDR}+)"
+        ))
+    })?;
     let version = pong["version"].as_str().unwrap_or("of unknown version");
     match pong["protocol"].as_u64() {
         Some(protocol) if protocol >= MIN_PROTOCOL => Ok(format!("herdr {version}, protocol {protocol}")),
@@ -672,6 +676,28 @@ mod tests {
         );
         assert_eq!(lines.len(), 1);
         assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn a_ping_herdr_rejects_or_cannot_answer_refuses_naming_the_pin() {
+        let (err, _, calls) = hand_off_against(&[
+            r#"{"id":"","error":{"code":"invalid_request","message":"unknown variant `ping`"}}"#,
+        ]);
+        assert!(
+            matches!(&err, EstateError::Protocol(m) if m.contains("unknown variant `ping`") && m.contains("needs protocol 22 (herdr 0.9.1+)")),
+            "{err}"
+        );
+        assert_eq!(calls, 0);
+        let d = TempDir::new();
+        let _g = EnvGuard::new(
+            &[("HERDR_PLUGIN_STATE_DIR", d.path().to_str().unwrap())],
+            &["HERDR_SOCKET_PATH"],
+        );
+        let err = hand_off(RowAction::Open, "home/garden", "w2").unwrap_err();
+        assert!(
+            matches!(&err, EstateError::Protocol(m) if m.contains("HERDR_SOCKET_PATH") && m.contains("needs protocol 22 (herdr 0.9.1+)")),
+            "{err}"
+        );
     }
 
     #[test]
