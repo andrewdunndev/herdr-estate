@@ -69,8 +69,9 @@ root, with the address in `HERDR_ESTATE_ADDRESS`.
 
 An estate's optional `prepare` runs an argv command, no shell, in the
 campaign's workdir before the workspace is closed or created; a
-non-zero exit refuses the launch and leaves a running workspace
-untouched.
+non-zero exit, or a run past 60 seconds, refuses the launch and leaves
+a running workspace untouched. The agent then has 30 seconds to be
+ready, and a picker row handed to herdr (below) is waited on for 120.
 
 ## Worktrees
 

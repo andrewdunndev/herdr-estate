@@ -11,8 +11,11 @@
   herdr runs outside every workspace. The replacement is created,
   started and focused as it is from any other workspace, and a refusal
   still holds in the popup, as does herdr's own error for a run that
-  never started. The popup waits on the run for at most 60 seconds,
+  never started. The popup waits on the run for at most 120 seconds,
   then names its plugin log entry.
+- An estate's `prepare` that runs past 60 seconds is killed and the
+  launch refused, where a hung one used to hang `resume`, `fresh` and
+  the picker with it.
 
 ## v0.2.1 - 2026-09-25
 

@@ -35,22 +35,28 @@ struct Wait {
     missing_polls: u32,
 }
 
-/// A handed-off run is one verb: at most `verbs::AGENT_START_TIMEOUT_MS`
-/// waiting on the agent, plus a margin for everything around it (the
-/// guards' reads, the close, the create, the focus). Past that, the
-/// popup stops waiting and says where the run's log is; the run itself
-/// carries on in herdr. A new entry can take a read or two to show in
-/// the listing, so a few misses are retried before one is an error.
+/// A handed-off run is one verb: at most `verbs::PREPARE_TIMEOUT_SECS`
+/// in the estate's `prepare` and `verbs::AGENT_START_TIMEOUT_MS` waiting
+/// on the agent, plus `DEADLINE_MARGIN_SECS` for everything around them
+/// (the guards' reads, the close, the create, the focus): 120 s. Past
+/// that, the popup stops waiting and says where the run's log is; the
+/// run itself carries on in herdr. A new entry can take a read or two
+/// to show in the listing, so a few misses are retried before one is
+/// an error.
 fn production_wait() -> Wait {
     Wait {
         poll: Duration::from_millis(500),
-        deadline: Duration::from_secs(verbs::agent_start_timeout_secs() + DEADLINE_MARGIN_SECS),
+        deadline: Duration::from_secs(dispatch_deadline_secs()),
         missing_polls: 10,
     }
 }
 
-/// `production_wait`'s allowance past the agent start, for the reads and calls
-/// around it.
+fn dispatch_deadline_secs() -> u64 {
+    verbs::PREPARE_TIMEOUT_SECS + verbs::agent_start_timeout_secs() + DEADLINE_MARGIN_SECS
+}
+
+/// `production_wait`'s allowance past the prepare and the agent start,
+/// for the reads and calls around them.
 const DEADLINE_MARGIN_SECS: u64 = 30;
 
 /// How many of the plugin's newest log entries each read asks for,
@@ -485,6 +491,12 @@ mod tests {
                 "50"
             ]
         );
+    }
+
+    #[test]
+    fn the_popup_outwaits_a_prepare_and_an_agent_start_by_a_margin() {
+        assert_eq!(dispatch_deadline_secs(), 120);
+        assert_eq!(production_wait().poll, Duration::from_millis(500));
     }
 
     fn quick(deadline_ms: u64, missing_polls: u32) -> Wait {

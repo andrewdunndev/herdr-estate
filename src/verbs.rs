@@ -40,6 +40,11 @@ use crate::prompt;
 use crate::verb::Verb;
 
 pub const AGENT_START_TIMEOUT_MS: &str = "30000";
+
+/// How long an estate's `prepare` may run before the launch refuses:
+/// twice the agent start's allowance, since a prepare may fetch or
+/// build before the agent ever starts.
+pub const PREPARE_TIMEOUT_SECS: u64 = 60;
 pub const PANE_PLACEHOLDER: &str = "<PANE_ID>";
 
 /// `open_workspace`'s closing progress line, for `resume`/`fresh`'s
@@ -379,19 +384,40 @@ fn check_replaceable_running_workspace(address: &str) -> Result<Workspace, Estat
 
 /// The estate's `prepare` command, argv form, run with the campaign's
 /// workdir as cwd, stdin closed, stdout and stderr captured. A spawn
-/// error (a missing binary, say) or a non-zero exit both refuse the same
+/// error (a missing binary, say), a non-zero exit, or a run past
+/// `PREPARE_TIMEOUT_SECS` (killed, then refused) all refuse the same
 /// way -- a guard error naming `address`, so the caller's `?` stops
 /// right here and never reaches the close or create that would
 /// otherwise follow. Success logs one progress step; the command's own
 /// stdout and stderr are otherwise discarded.
 fn run_prepare(campaign: &Campaign, address: &str, argv: &[String]) -> Result<(), EstateError> {
-    let output = std::process::Command::new(&argv[0])
+    run_prepare_within(
+        campaign,
+        address,
+        argv,
+        std::time::Duration::from_secs(PREPARE_TIMEOUT_SECS),
+    )
+}
+
+/// `run_prepare` with its deadline as a parameter, for the tests. Both
+/// pipes are drained on their own threads while this waits, so a
+/// prepare that writes more than a pipe holds never stalls on it. Only
+/// the command itself is killed at the deadline; a process it started
+/// and left running is its own.
+fn run_prepare_within(
+    campaign: &Campaign,
+    address: &str,
+    argv: &[String],
+    timeout: std::time::Duration,
+) -> Result<(), EstateError> {
+    use std::io::Read;
+    let mut child = std::process::Command::new(&argv[0])
         .args(&argv[1..])
         .current_dir(&campaign.workdir)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .output()
+        .spawn()
         .map_err(|e| {
             EstateError::Guard(format!(
                 "{address}: prepare failed to run {} in {}: {e}",
@@ -399,6 +425,50 @@ fn run_prepare(campaign: &Campaign, address: &str, argv: &[String]) -> Result<()
                 campaign.workdir.display()
             ))
         })?;
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    };
+    let stdout = drain(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let stderr = drain(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let started = std::time::Instant::now();
+    let status = loop {
+        let waited = child.try_wait().map_err(|e| {
+            EstateError::Guard(format!("{address}: prepare could not be waited on: {e}"))
+        })?;
+        if let Some(status) = waited {
+            break status;
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(EstateError::Guard(format!(
+                "{address}: prepare timed out after {}s",
+                timeout.as_secs()
+            )));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let output = std::process::Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    };
     if !output.status.success() {
         return Err(EstateError::Guard(format!(
             "{address}: prepare failed: {}",
@@ -1489,6 +1559,75 @@ mod tests {
     }
 
     // --- prepare ---
+
+    fn prepare_campaign(workdir: &Path) -> Campaign {
+        Campaign {
+            address: "home/garden".to_string(),
+            estate: "home".to_string(),
+            name: "garden".to_string(),
+            dir: workdir.to_path_buf(),
+            workdir: workdir.to_path_buf(),
+            kind: AgentKind::Claude,
+            add_dirs: Vec::new(),
+            prompt_files: Vec::new(),
+            kind_flags: Default::default(),
+            env: Default::default(),
+            prepare: None,
+        }
+    }
+
+    fn argv_of(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_prepare_past_its_deadline_is_killed_and_refused() {
+        let d = crate::test_support::TempDir::new();
+        let _g = crate::test_support::EnvGuard::set(&[(
+            "HERDR_PLUGIN_STATE_DIR",
+            d.path().to_str().unwrap(),
+        )]);
+        let campaign = prepare_campaign(d.path());
+        let started = std::time::Instant::now();
+        let err = run_prepare_within(
+            &campaign,
+            "home/garden",
+            &argv_of(&["sleep", "30"]),
+            std::time::Duration::from_millis(200),
+        )
+        .unwrap_err();
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        assert!(
+            matches!(&err, EstateError::Guard(m) if m == "home/garden: prepare timed out after 0s"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_prepare_that_writes_more_than_a_pipe_holds_still_finishes() {
+        let d = crate::test_support::TempDir::new();
+        let _g = crate::test_support::EnvGuard::set(&[(
+            "HERDR_PLUGIN_STATE_DIR",
+            d.path().to_str().unwrap(),
+        )]);
+        let campaign = prepare_campaign(d.path());
+        run_prepare_within(
+            &campaign,
+            "home/garden",
+            &argv_of(&[
+                "sh",
+                "-c",
+                "head -c 1000000 /dev/zero; head -c 1000000 /dev/zero >&2",
+            ]),
+            std::time::Duration::from_secs(20),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn the_prepare_deadline_is_twice_the_agent_starts() {
+        assert_eq!(PREPARE_TIMEOUT_SECS, 2 * agent_start_timeout_secs());
+    }
 
     /// Sets the fixture's `home` estate row's `prepare` key to `argv`.
     fn set_prepare(f: &mut Fixture, argv: &[&str]) {
