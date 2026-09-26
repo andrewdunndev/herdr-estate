@@ -15,6 +15,7 @@
 //! decision is always made inside the verb, never on the stale row the
 //! list build saw.
 
+use crate::detach::RowAction;
 use crate::doubleopen;
 use crate::errors::EstateError;
 use crate::herdrcli;
@@ -27,33 +28,7 @@ use crate::verbs;
 /// propagate without focusing anything.
 pub fn open_row(estates: &toml::Table, row: &Row) -> Result<(), EstateError> {
     let workspace_id = match &row.state {
-        // A Live row only names an address that carried a workspace when
-        // the list was built; the picker can sit open for a while, so
-        // that workspace's liveness (or existence) is re-read here
-        // rather than trusted from the stale row. Only a workspace that
-        // is genuinely alive right now is focus-only — anything else
-        // (the agent exited, the workspace closed, a duplicate label)
-        // goes through `resume_with_ids`, which owns the alive check,
-        // the close-and-recreate decision and the duplicate-label
-        // refusal, exactly as it does for a `Dormant` row.
-        RowState::Live { .. } => match doubleopen::live_workspace(&row.address)? {
-            Some(ws) if doubleopen::workspace_alive(&ws) => {
-                progress::step(&format!(
-                    "{}: already running in {}",
-                    row.address, ws.workspace_id
-                ));
-                ws.workspace_id
-            }
-            _ => {
-                let result = verbs::resume_with_ids(estates, &row.address, false)?;
-                result.workspace_id.ok_or_else(|| {
-                    EstateError::Protocol(format!(
-                        "{}: resume did not report a workspace id",
-                        row.address
-                    ))
-                })?
-            }
-        },
+        RowState::Live { .. } => open_live(estates, &row.address)?,
         RowState::Dormant { .. } => {
             let result = verbs::resume_with_ids(estates, &row.address, false)?;
             result.workspace_id.ok_or_else(|| {
@@ -63,24 +38,68 @@ pub fn open_row(estates: &toml::Table, row: &Row) -> Result<(), EstateError> {
                 ))
             })?
         }
-        RowState::New => return fresh_row(estates, row),
+        RowState::New => return fresh_row(estates, &row.address),
     };
     focus(&row.address, workspace_id)
+}
+
+/// Enter on a Live row. It only names an address that carried a
+/// workspace when the list was built; the picker can sit open for a
+/// while, so that workspace's liveness (or existence) is re-read here
+/// rather than trusted from the stale row. Only a workspace that is
+/// genuinely alive right now is focus-only — anything else (the agent
+/// exited, the workspace closed, a duplicate label) goes through
+/// `resume_with_ids`, which owns the alive check, the
+/// close-and-recreate decision and the duplicate-label refusal, exactly
+/// as it does for a `Dormant` row. Returns the workspace to focus.
+fn open_live(estates: &toml::Table, address: &str) -> Result<String, EstateError> {
+    match doubleopen::live_workspace(address)? {
+        Some(ws) if doubleopen::workspace_alive(&ws) => {
+            progress::step(&format!(
+                "{address}: already running in {}",
+                ws.workspace_id
+            ));
+            Ok(ws.workspace_id)
+        }
+        _ => {
+            let result = verbs::resume_with_ids(estates, address, false)?;
+            result.workspace_id.ok_or_else(|| {
+                EstateError::Protocol(format!("{address}: resume did not report a workspace id"))
+            })
+        }
+    }
+}
+
+/// `pick --dispatch <action> <address>`: what the popup's row asked
+/// for, run by the process `detach::hand_off` started in a session of
+/// its own, because the row's workspace is the popup's. The row was
+/// Live when the popup chose it, so `open` takes the Live row's path;
+/// `fresh` and `stop` never read the row's state at all.
+pub fn run_action(
+    estates: &toml::Table,
+    action: RowAction,
+    address: &str,
+) -> Result<(), EstateError> {
+    match action {
+        RowAction::Open => {
+            let workspace_id = open_live(estates, address)?;
+            focus(address, workspace_id)
+        }
+        RowAction::Fresh => fresh_row(estates, address),
+        RowAction::Stop => fresh_row_running(estates, address),
+    }
 }
 
 /// Ctrl-f on a row, and Enter on a New one: start a fresh conversation
 /// through `verbs::fresh_with_ids`, whatever the row's state, then focus
 /// the workspace it opens. The verb owns every refusal, a running agent
 /// included, and the retired conversation id stays in `sessions.log`.
-pub fn fresh_row(estates: &toml::Table, row: &Row) -> Result<(), EstateError> {
-    let result = verbs::fresh_with_ids(estates, &row.address, false)?;
+pub fn fresh_row(estates: &toml::Table, address: &str) -> Result<(), EstateError> {
+    let result = verbs::fresh_with_ids(estates, address, false)?;
     let workspace_id = result.workspace_id.ok_or_else(|| {
-        EstateError::Protocol(format!(
-            "{}: fresh did not report a workspace id",
-            row.address
-        ))
+        EstateError::Protocol(format!("{address}: fresh did not report a workspace id"))
     })?;
-    focus(&row.address, workspace_id)
+    focus(address, workspace_id)
 }
 
 /// Ctrl-f's second press, armed on a row `core::arm_eligible` already
@@ -90,15 +109,12 @@ pub fn fresh_row(estates: &toml::Table, row: &Row) -> Result<(), EstateError> {
 /// idle-or-done guard itself, so a status that changed between the arm
 /// and this second press refuses here exactly as `fresh_row` refuses a
 /// working or blocked one.
-pub fn fresh_row_running(estates: &toml::Table, row: &Row) -> Result<(), EstateError> {
-    let result = verbs::fresh_with_ids_stop_running(estates, &row.address)?;
+pub fn fresh_row_running(estates: &toml::Table, address: &str) -> Result<(), EstateError> {
+    let result = verbs::fresh_with_ids_stop_running(estates, address)?;
     let workspace_id = result.workspace_id.ok_or_else(|| {
-        EstateError::Protocol(format!(
-            "{}: fresh did not report a workspace id",
-            row.address
-        ))
+        EstateError::Protocol(format!("{address}: fresh did not report a workspace id"))
     })?;
-    focus(&row.address, workspace_id)
+    focus(address, workspace_id)
 }
 
 /// Enter on the picker's `+ create` line, with a brief typed: create the
@@ -370,14 +386,7 @@ mod tests {
         f.fake.set_response(1, CREATE_OK, 0);
         f.fake.set_response(2, r#"{"result": {}}"#, 0);
 
-        let row = Row {
-            address: "home/garden".to_string(),
-            state: RowState::Dormant {
-                last: "2026-09-10".to_string(),
-            },
-            brief: String::new(),
-        };
-        fresh_row(&f.estates, &row).unwrap();
+        fresh_row(&f.estates, "home/garden").unwrap();
 
         assert_eq!(f.fake.call_count(), 4);
         assert_eq!(f.fake.argv(1)[..2], ["workspace", "create"]);
@@ -440,15 +449,7 @@ mod tests {
         f.fake.set_response(3, CREATE_OK, 0); // create
         f.fake.set_response(4, r#"{"result": {}}"#, 0); // start
 
-        let row = Row {
-            address: "home/garden".to_string(),
-            state: RowState::Live {
-                workspace_id: "w1".to_string(),
-                agent_status: "idle".to_string(),
-            },
-            brief: String::new(),
-        };
-        fresh_row_running(&f.estates, &row).unwrap();
+        fresh_row_running(&f.estates, "home/garden").unwrap();
 
         assert_eq!(f.fake.call_count(), 6);
         assert_eq!(f.fake.argv(2), vec!["workspace", "close", "w1"]);
@@ -457,6 +458,76 @@ mod tests {
         let lines = crate::continuity::read(&cdir);
         assert_eq!(lines.len(), 2, "the retired id stays, the new one appends");
         assert!(lines[0].ends_with(" old-sid"), "{lines:?}");
+    }
+
+    #[test]
+    fn run_action_stop_is_the_whole_stop_close_create_start_and_focus() {
+        // `pick --dispatch stop`, as the handed-off process runs it: the
+        // same verb Ctrl-f's second press reaches in the popup, through
+        // to the focus, with the retired id kept and ownership moved to
+        // the new workspace.
+        let f = make_fixture();
+        let cdir = f.campaign("garden");
+        crate::continuity::append(&cdir, "old-sid").unwrap();
+        crate::ownership::record("home/garden", "w1").unwrap();
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "idle", "pane_count": 1}
+            ]}}"#,
+            0,
+        );
+        f.fake.set_response(
+            1,
+            r#"{"result": {"workspace": {"label": "home/garden", "agent_status": "idle", "pane_count": 1}}}"#,
+            0,
+        );
+        f.fake.set_response(2, r#"{"result": {}}"#, 0); // close
+        f.fake.set_response(3, CREATE_OK, 0); // create
+        f.fake.set_response(4, r#"{"result": {}}"#, 0); // start
+
+        run_action(&f.estates, RowAction::Stop, "home/garden").unwrap();
+
+        assert_eq!(f.fake.argv(2), vec!["workspace", "close", "w1"]);
+        assert_eq!(f.fake.argv(5), vec!["workspace", "focus", "w-new"]);
+        assert_eq!(crate::continuity::read(&cdir).len(), 2);
+        assert!(!crate::ownership::is_ours("w1"));
+        assert!(crate::ownership::is_ours("w-new"));
+    }
+
+    #[test]
+    fn run_action_open_takes_the_live_rows_path_and_only_focuses_an_alive_one() {
+        let f = make_fixture();
+        f.campaign("garden");
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w2", "label": "home/garden", "agent_status": "working"}
+            ]}}"#,
+            0,
+        );
+        run_action(&f.estates, RowAction::Open, "home/garden").unwrap();
+        assert_eq!(f.fake.call_count(), 2);
+        assert_eq!(f.fake.argv(1), vec!["workspace", "focus", "w2"]);
+    }
+
+    #[test]
+    fn run_action_fresh_refuses_a_running_agent_the_way_ctrl_f_does() {
+        // `fresh`, not `stop`: the ordinary verb, which refuses an
+        // attached agent and never closes it.
+        let f = make_fixture();
+        f.campaign("garden");
+        crate::ownership::record("home/garden", "w2").unwrap();
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w2", "label": "home/garden", "agent_status": "idle", "pane_count": 1}
+            ]}}"#,
+            0,
+        );
+        let err = run_action(&f.estates, RowAction::Fresh, "home/garden").unwrap_err();
+        assert!(matches!(err, EstateError::Guard(msg) if msg.contains("running agent")));
+        assert_eq!(f.fake.call_count(), 1);
     }
 
     #[test]
@@ -475,15 +546,7 @@ mod tests {
             0,
         );
 
-        let row = Row {
-            address: "home/garden".to_string(),
-            state: RowState::Live {
-                workspace_id: "w1".to_string(),
-                agent_status: "working".to_string(),
-            },
-            brief: String::new(),
-        };
-        let err = fresh_row_running(&f.estates, &row).unwrap_err();
+        let err = fresh_row_running(&f.estates, "home/garden").unwrap_err();
         assert!(matches!(err, EstateError::Guard(_)));
         assert_eq!(f.fake.call_count(), 1); // only the re-read, no close call
         assert!(crate::progress::logged_messages().is_empty());

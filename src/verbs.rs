@@ -1978,6 +1978,45 @@ mod tests {
     }
 
     #[test]
+    fn a_start_that_fails_after_the_close_leaves_every_record_matching_herdr() {
+        // The order a run cut short anywhere past the close must leave
+        // true: the closed workspace is forgotten as soon as it is gone,
+        // the new one is owned as soon as it exists, and sessions.log
+        // names the new conversation only once its agent has started.
+        // Here the start fails, so the old conversation stays the latest
+        // (resumable), and the new workspace, which herdr does hold, is
+        // ours to close on the next run.
+        let f = make_fixture("claude");
+        continuity::append(&f.cdir, "old-sid").unwrap();
+        ownership::record("home/garden", "w1").unwrap();
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "idle", "pane_count": 1}
+            ]}}"#,
+            0,
+        );
+        f.fake.set_response(
+            1,
+            r#"{"result": {"workspace": {"label": "home/garden", "agent_status": "idle", "pane_count": 1}}}"#,
+            0,
+        );
+        f.fake.set_response(2, r#"{"result": {}}"#, 0); // close
+        f.fake.set_response(3, CREATE_OK, 0); // create
+        f.fake
+            .set_response(4, r#"{"error": {"code": "timeout"}}"#, 1); // start
+
+        assert!(fresh_with_ids_stop_running(&f.estates, "home/garden").is_err());
+        assert_eq!(
+            continuity::latest_conversation(&f.cdir).as_deref(),
+            Some("old-sid")
+        );
+        assert_eq!(continuity::read(&f.cdir).len(), 1);
+        assert!(!ownership::is_ours("w1"));
+        assert!(ownership::is_ours("w9"));
+    }
+
+    #[test]
     fn stop_running_prepare_success_runs_before_the_close_and_the_create() {
         let mut f = make_fixture("claude");
         continuity::append(&f.cdir, "old-sid").unwrap();

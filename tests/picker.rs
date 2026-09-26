@@ -249,3 +249,84 @@ fn the_pick_action_opens_the_popup_instead_of_drawing() {
         .unwrap()
         .ends_with(" run: herdr-estate pick (herdr action pick)"));
 }
+
+#[test]
+fn the_dispatch_stop_action_replaces_the_workspace_its_context_names() {
+    // How herdr runs `dispatch-stop` for a popup opened in w1: the
+    // manifest's argv, no address, the address in the invocation
+    // context. Everything after the close (create, ownership, agent
+    // start, sessions.log, the focus) runs in this one process.
+    let (f, root) = fixture();
+    let cdir = make_campaign(&root, "garden", "---\n---\n");
+    append_session(&cdir, "2026-09-10T00:00:00.000000+00:00", "old-sid");
+    std::fs::create_dir_all(&f.state_dir).unwrap();
+    std::fs::write(f.state_dir.join("owned.json"), r#"{"w1":"home/garden"}"#).unwrap();
+    f.fake.set_response(
+        0,
+        r#"{"result": {"workspaces": [
+            {"workspace_id": "w1", "label": "home/garden", "agent_status": "idle", "pane_count": 1}
+        ]}}"#,
+        0,
+    );
+    f.fake.set_response(
+        1,
+        r#"{"result": {"workspace": {"label": "home/garden", "agent_status": "idle", "pane_count": 1}}}"#,
+        0,
+    );
+    f.fake.set_response(2, r#"{"result": {}}"#, 0); // close
+    f.fake.set_response(
+        3,
+        r#"{"result": {"workspace": {"workspace_id": "w9"}, "root_pane": {"pane_id": "w9:p1"}}}"#,
+        0,
+    ); // create
+    f.fake.set_response(4, r#"{"result": {}}"#, 0); // agent start
+    f.fake.set_response(5, r#"{"result": {}}"#, 0); // focus
+
+    let context = r#"{"workspace_id":"w1","workspace_label":"home/garden"}"#;
+    let out = run(
+        &f,
+        &["pick", "--dispatch", "stop"],
+        &[
+            ("HERDR_PLUGIN_ACTION_ID", "dispatch-stop"),
+            ("HERDR_PLUGIN_CONTEXT_JSON", context),
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(f.fake.call_count(), 6);
+    assert_eq!(f.fake.argv(2), vec!["workspace", "close", "w1"]);
+    assert_eq!(f.fake.argv(5), vec!["workspace", "focus", "w9"]);
+    let sessions = std::fs::read_to_string(cdir.join("sessions.log")).unwrap();
+    assert_eq!(sessions.lines().count(), 2, "{sessions}");
+    let owned = std::fs::read_to_string(f.state_dir.join("owned.json")).unwrap();
+    assert_eq!(owned, r#"{"w9":"home/garden"}"#);
+}
+
+#[test]
+fn a_handed_off_refusal_exits_1_and_leaves_its_error_in_the_log() {
+    // Refused before anything changes, so the popup is still there to
+    // hold the error the handed-off process printed and logged.
+    let (f, root) = fixture();
+    make_campaign(&root, "garden", "---\n---\n");
+    f.fake.set_response(
+        0,
+        r#"{"result": {"workspaces": [
+            {"workspace_id": "w1", "label": "home/garden", "agent_status": "working", "pane_count": 1}
+        ]}}"#,
+        0,
+    );
+    let out = run(&f, &["pick", "--dispatch", "stop", "home/garden"], &[]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(f.fake.call_count(), 1);
+    assert!(
+        stderr(&out).contains("herdr-estate: home/garden:"),
+        "{}",
+        stderr(&out)
+    );
+    let events = std::fs::read_to_string(f.state_dir.join("events.log")).unwrap();
+    let lines: Vec<&str> = events.lines().collect();
+    assert!(lines[0].ends_with(" run: herdr-estate pick --dispatch stop home/garden (shell)"));
+    assert!(
+        lines.last().unwrap().contains(" error: home/garden:"),
+        "{events}"
+    );
+}

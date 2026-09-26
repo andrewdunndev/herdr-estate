@@ -32,6 +32,28 @@ title = "Pick"
 contexts = ["workspace"]
 command = ["target/release/herdr-estate", "pick"]
 
+# The picker's hand-off when a row's workspace is the popup's own
+# (src/detach.rs): herdr runs an action outside every workspace, so the
+# close can't end it. The address rides in the invocation's context.
+# No contexts: nothing for an operator to invoke them from.
+[[actions]]
+id = "dispatch-open"
+title = "Picker hand-off: open"
+contexts = []
+command = ["target/release/herdr-estate", "pick", "--dispatch", "open"]
+
+[[actions]]
+id = "dispatch-fresh"
+title = "Picker hand-off: fresh"
+contexts = []
+command = ["target/release/herdr-estate", "pick", "--dispatch", "fresh"]
+
+[[actions]]
+id = "dispatch-stop"
+title = "Picker hand-off: stop and fresh"
+contexts = []
+command = ["target/release/herdr-estate", "pick", "--dispatch", "stop"]
+
 [[panes]]
 id = "picker"
 title = "campaigns"

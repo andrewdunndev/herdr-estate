@@ -6,6 +6,7 @@ mod campaign;
 pub mod cli;
 mod config;
 mod continuity;
+mod detach;
 mod dispatch;
 mod doubleopen;
 mod errors;

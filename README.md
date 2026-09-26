@@ -136,7 +136,9 @@ cargo fmt --check && cargo clippy --release --all-targets --all-features -- -D w
 
 `plugin link` skips `[[build]]`; a rebuild takes effect on herdr's
 next call. Tests drive a fake herdr through `$HERDR_BIN_PATH`.
-`pick --render-once` prints one frame.
+`pick --render-once` prints one frame. When a row's workspace is the
+popup's own, the popup hands it to a `dispatch-*` action, which runs
+`pick --dispatch`.
 
 ---
 

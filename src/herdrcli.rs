@@ -1,8 +1,11 @@
 //! The one seam between this crate and the herdr CLI itself.
 //!
 //! Every herdr invocation anywhere in this crate goes through
-//! `call_herdr`. Tests point `HERDR_BIN_PATH` at a fake executable
-//! (`crate::test_support::FakeHerdr`) and never run a real herdr binary.
+//! `call_herdr`, but one: `call_api` sends the single request the CLI
+//! can't express straight to herdr's socket. Tests point `HERDR_BIN_PATH`
+//! at a fake executable (`crate::test_support::FakeHerdr`), and
+//! `HERDR_SOCKET_PATH` at a listener of their own, and never run a real
+//! herdr binary.
 
 use std::collections::BTreeMap;
 use std::process::Command;
@@ -247,6 +250,46 @@ pub fn call_herdr(args: &[String], check: bool) -> Result<HerdrResult, EstateErr
     }
 
     Ok(HerdrResult { ok, data })
+}
+
+/// One request straight to herdr's API socket, `$HERDR_SOCKET_PATH`
+/// (set in every pane and action herdr runs): a line of JSON out, one
+/// line back, shaped by herdr's bundled schema (`herdr api schema`).
+/// Only for what the CLI can't send, today a plugin action invoked with
+/// a context of this plugin's own; everything else goes through
+/// `call_herdr`. Returns the reply's `result`; a herdr `error`, an
+/// unreachable socket or a reply that isn't JSON is
+/// `EstateError::Protocol` naming `method`.
+pub fn call_api(method: &str, params: serde_json::Value) -> Result<serde_json::Value, EstateError> {
+    use std::io::{BufRead, BufReader, Write};
+    let failed = |why: String| EstateError::Protocol(format!("{method}: {why}"));
+    let path = non_empty_env("HERDR_SOCKET_PATH")
+        .ok_or_else(|| failed("$HERDR_SOCKET_PATH is unset".to_string()))?;
+    let mut stream = std::os::unix::net::UnixStream::connect(&path)
+        .map_err(|e| failed(format!("could not reach herdr at {path}: {e}")))?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .map_err(|e| failed(e.to_string()))?;
+    let request = serde_json::json!({
+        "id": format!("herdr-estate:{method}"),
+        "method": method,
+        "params": params,
+    });
+    writeln!(stream, "{request}").map_err(|e| failed(e.to_string()))?;
+    let mut line = String::new();
+    BufReader::new(&stream)
+        .read_line(&mut line)
+        .map_err(|e| failed(e.to_string()))?;
+    let reply: serde_json::Value = serde_json::from_str(&line)
+        .map_err(|_| failed("herdr's reply was not JSON".to_string()))?;
+    if let Some(result) = reply.get("result") {
+        return Ok(result.clone());
+    }
+    let message = reply
+        .pointer("/error/message")
+        .and_then(|m| m.as_str())
+        .unwrap_or("herdr's reply carried no result");
+    Err(failed(message.to_string()))
 }
 
 /// Every workspace herdr currently has open, via `workspace list`. A

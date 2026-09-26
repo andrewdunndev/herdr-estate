@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- The picker no longer stops halfway when the row it acts on is the
+  workspace it was opened from. Closing that workspace ended the popup
+  and the run inside it, after the close and before the create, so
+  Ctrl-f's second press stopped the agent and started nothing. The
+  popup now hands such a row to herdr as one of three new manifest
+  actions, `dispatch-open`, `dispatch-fresh` and `dispatch-stop`, which
+  herdr runs outside every workspace. The replacement is created,
+  started and focused as it is from any other workspace, and a refusal
+  still holds in the popup.
+
 ## v0.2.1 - 2026-09-25
 
 - A bare shell invocation now resolves the state dir to the same

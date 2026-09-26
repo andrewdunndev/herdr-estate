@@ -1,6 +1,8 @@
 //! bin/herdr-estate's argument parsing and dispatch.
 
 use crate::config;
+use crate::detach::{self, RowAction};
+use crate::dispatch;
 use crate::errors::EstateError;
 use crate::picker;
 use crate::progress;
@@ -33,6 +35,13 @@ pub enum Command {
         width: usize,
         height: usize,
     },
+    /// `pick --dispatch <open|fresh|stop> [<address>]`: a picker row's
+    /// dispatch with no picker, run by the manifest's `dispatch-*`
+    /// actions when the row's workspace is the popup's (`detach`).
+    PickDispatch {
+        action: RowAction,
+        address: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,7 +52,8 @@ pub struct ParseError {
 /// A small hand-rolled parser: one required subcommand (`resume`,
 /// `fresh`, `list`, `create` or `pick`), an optional positional
 /// `address` and `--dry-run` on resume and fresh, create's required
-/// address, `--brief` and `--dry-run`, and pick's render flags. Anything
+/// address, `--brief` and `--dry-run`, and pick's render flags or its
+/// `--dispatch <action> <address>`. Anything
 /// else is a usage error, exit code 2.
 pub fn parse_args(argv: &[String]) -> Result<Command, ParseError> {
     let verb = argv.first().ok_or_else(|| ParseError {
@@ -128,6 +138,9 @@ fn parse_create(rest: &[String]) -> Result<Command, ParseError> {
 }
 
 fn parse_pick(rest: &[String]) -> Result<Command, ParseError> {
+    if rest.first().map(String::as_str) == Some("--dispatch") {
+        return parse_pick_dispatch(&rest[1..]);
+    }
     let mut render_once = false;
     let mut width = PICK_DEFAULT_WIDTH;
     let mut height = PICK_DEFAULT_HEIGHT;
@@ -156,6 +169,27 @@ fn parse_pick(rest: &[String]) -> Result<Command, ParseError> {
         width,
         height,
     })
+}
+
+/// `--dispatch`'s action, then an optional address, nothing after them.
+/// With no address, the invocation context's workspace label is used.
+fn parse_pick_dispatch(rest: &[String]) -> Result<Command, ParseError> {
+    let (action, address) = match rest {
+        [action] => (action, None),
+        [action, address] if !address.starts_with('-') => (action, Some(address.clone())),
+        _ => {
+            return Err(ParseError {
+                message: "argument --dispatch: expected an action and an optional address"
+                    .to_string(),
+            })
+        }
+    };
+    let action = RowAction::from_arg(action).ok_or_else(|| ParseError {
+        message: format!(
+            "argument --dispatch: invalid choice: {action:?} (choose from 'open', 'fresh', 'stop')"
+        ),
+    })?;
+    Ok(Command::PickDispatch { action, address })
 }
 
 fn parse_dimension(value: Option<&String>, flag: &str) -> Result<usize, ParseError> {
@@ -228,6 +262,14 @@ fn dispatch(cmd: Command) -> Result<i32, EstateError> {
             }
             let estates = config::load_estates(None)?;
             picker::shell::run(&estates, render_once, width, height)
+        }
+        Command::PickDispatch { action, address } => {
+            let estates = config::load_estates(None)?;
+            let addr = match address {
+                Some(a) => a,
+                None => detach::context_address()?,
+            };
+            dispatch::run_action(&estates, action, &addr).map(|()| 0)
         }
     }
 }
@@ -416,6 +458,47 @@ mod tests {
     #[test]
     fn parse_pick_rejects_an_unknown_flag() {
         assert!(parse_args(&args(&["pick", "--nope"])).is_err());
+    }
+
+    #[test]
+    fn parse_pick_dispatch_takes_each_action_and_an_address() {
+        for (arg, action) in [
+            ("open", RowAction::Open),
+            ("fresh", RowAction::Fresh),
+            ("stop", RowAction::Stop),
+        ] {
+            assert_eq!(
+                parse_args(&args(&["pick", "--dispatch", arg, "home/garden"])).unwrap(),
+                Command::PickDispatch {
+                    action,
+                    address: Some("home/garden".to_string()),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn parse_pick_dispatch_with_no_address_leaves_it_to_the_context() {
+        assert_eq!(
+            parse_args(&args(&["pick", "--dispatch", "stop"])).unwrap(),
+            Command::PickDispatch {
+                action: RowAction::Stop,
+                address: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_pick_dispatch_refuses_an_unknown_action_a_flag_or_extras() {
+        for argv in [
+            &["pick", "--dispatch", "close", "home/garden"][..],
+            &["pick", "--dispatch"],
+            &["pick", "--dispatch", "stop", "--render-once"],
+            &["pick", "--dispatch", "stop", "home/garden", "home/attic"],
+            &["pick", "--render-once", "--dispatch", "stop", "home/garden"],
+        ] {
+            assert!(parse_args(&args(argv)).is_err(), "{argv:?}");
+        }
     }
 
     #[test]
