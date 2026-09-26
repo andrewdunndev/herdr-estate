@@ -44,8 +44,10 @@
   `--dry-run` and a refused launch no longer write that warning to
   `events.log`; a dry run lists the path in its plan.
 - An estate's `prepare` that runs past 60 seconds is killed, with
-  every process it started, and the launch refused, where a hung one used to hang `resume`, `fresh` and
-  the picker with it.
+  every process it started, and the launch refused, where a hung one
+  used to hang `resume`, `fresh` and the picker with it. `prepare` now
+  runs in its own process group, so a Ctrl-C in the terminal running
+  the verb no longer reaches it.
 - The package license reads `MIT AND Apache-2.0`: the picker's theme
   code adapts herdr's under Apache-2.0, as the README's new License
   section says.

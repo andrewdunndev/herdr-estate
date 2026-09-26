@@ -50,10 +50,11 @@ action, or the picker pane), otherwise `$XDG_STATE_HOME/herdr/plugins/herdr-esta
 or `~/.local/state/herdr/plugins/herdr-estate`. That is the directory
 herdr itself would set the variable to, so a shell invocation and a
 herdr-launched one land in the same place. It also holds the ownership
-record (`owned.json`), each campaign's assembled prompt
-(`<estate>-<campaign>.prompt.md`) the worktrees the verbs create
-(under `worktrees/`) and, while a launch runs, its campaign's lock
-(under `locks/`). The log is created readable by you only, and a failed herdr call's
+record (`owned.json`) and its lock (`owned.lock`), each campaign's
+assembled prompt (`<estate>-<campaign>.prompt.md`), the worktrees the
+verbs create (under `worktrees/`), and one lock file per campaign
+(under `locks/`), held while a launch runs and left in place after.
+The log is created readable by you only, and a failed herdr call's
 message masks every estate `env` value the way a `--dry-run` plan
 does, on stderr and in the log alike. The log only grows; delete it
 whenever.
