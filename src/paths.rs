@@ -120,6 +120,26 @@ pub fn state_dir() -> PathBuf {
         .join(PLUGIN_ID)
 }
 
+/// Where herdr keeps this plugin's config: `$HERDR_PLUGIN_CONFIG_DIR`
+/// when herdr sets it (a plugin action or pane), else the directory
+/// herdr would set it to, `<config root>/herdr/plugins/config/herdr-estate`
+/// with `$XDG_CONFIG_HOME` or `$HOME/.config` as the root. That is what
+/// `herdr plugin config-dir herdr-estate` prints, so a shell run and a
+/// herdr-launched one read the same estate table.
+pub fn plugin_config_dir() -> PathBuf {
+    if let Some(d) = non_empty_env("HERDR_PLUGIN_CONFIG_DIR") {
+        return PathBuf::from(d);
+    }
+    let base = match non_empty_env("XDG_CONFIG_HOME") {
+        Some(x) => PathBuf::from(x),
+        None => home_dir().join(".config"),
+    };
+    base.join(HERDR_APP_DIR_NAME)
+        .join("plugins")
+        .join("config")
+        .join(PLUGIN_ID)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,6 +229,36 @@ mod tests {
         assert_eq!(
             state_dir(),
             PathBuf::from("/tmp/fake-home/.local/state/herdr/plugins/herdr-estate")
+        );
+    }
+
+    #[test]
+    fn plugin_config_dir_uses_herdrs_variable_when_set() {
+        let _g = EnvGuard::set(&[("HERDR_PLUGIN_CONFIG_DIR", "/tmp/plugin-config")]);
+        assert_eq!(plugin_config_dir(), PathBuf::from("/tmp/plugin-config"));
+    }
+
+    #[test]
+    fn plugin_config_dir_falls_back_to_xdg_config_home() {
+        let _g = EnvGuard::new(
+            &[("XDG_CONFIG_HOME", "/tmp/xdg-config")],
+            &["HERDR_PLUGIN_CONFIG_DIR"],
+        );
+        assert_eq!(
+            plugin_config_dir(),
+            PathBuf::from("/tmp/xdg-config/herdr/plugins/config/herdr-estate")
+        );
+    }
+
+    #[test]
+    fn plugin_config_dir_falls_back_to_home_config() {
+        let _g = EnvGuard::new(
+            &[("HOME", "/tmp/fake-home"), ("HERDR_PLUGIN_CONFIG_DIR", "")],
+            &["XDG_CONFIG_HOME"],
+        );
+        assert_eq!(
+            plugin_config_dir(),
+            PathBuf::from("/tmp/fake-home/.config/herdr/plugins/config/herdr-estate")
         );
     }
 

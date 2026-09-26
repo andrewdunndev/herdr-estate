@@ -52,8 +52,11 @@ or a [release binary](https://gitlab.com/dunn.dev/herdr-estate/-/releases) puts 
 
 ![An address names one estate table and one campaign directory, whose campaign.md sets the agent, its flags and extra paths.](diagrams/two-files.svg)
 
-The estate table lives at `~/.config/herdr-estate/estates.toml`; only
-`root` is required:
+The estate table is `estates.toml` in the config dir herdr gives the
+plugin, `~/.config/herdr/plugins/config/herdr-estate/` by default
+(`herdr plugin config-dir herdr-estate` prints it); a shell run reads
+the same file. When it isn't there, `~/.config/herdr-estate/estates.toml`
+is read instead. Only `root` is required:
 
 ```toml
 [estate.home]

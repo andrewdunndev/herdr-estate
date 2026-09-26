@@ -3,21 +3,32 @@
 use std::path::{Path, PathBuf};
 
 use crate::errors::EstateError;
-use crate::paths::{home_dir, non_empty_env};
+use crate::paths::{home_dir, plugin_config_dir};
 
 pub const DEFAULT_CAMPAIGNS_DIR: &str = "campaigns";
 pub const DEFAULT_AGENT_KIND: &str = "claude";
 
-/// `$HERDR_PLUGIN_CONFIG_DIR/estates.toml` when herdr sets that (running
-/// as a plugin action) and the file is actually there; otherwise the
-/// fallback a bare shell invocation uses.
+/// `estates.toml` in herdr's config dir for this plugin
+/// (`paths::plugin_config_dir`), the same file whether herdr or a shell
+/// runs this. When that file isn't there but `legacy_config_path` is,
+/// the legacy file is read instead; with neither, herdr's path is the
+/// one a missing-table error names.
 pub fn config_path() -> PathBuf {
-    if let Some(d) = non_empty_env("HERDR_PLUGIN_CONFIG_DIR") {
-        let p = PathBuf::from(d).join("estates.toml");
-        if p.is_file() {
-            return p;
-        }
+    let herdrs = plugin_config_dir().join("estates.toml");
+    if herdrs.is_file() {
+        return herdrs;
     }
+    let legacy = legacy_config_path();
+    if legacy.is_file() {
+        return legacy;
+    }
+    herdrs
+}
+
+/// `~/.config/herdr-estate/estates.toml`, where a shell run looked
+/// before it mirrored herdr's config dir, and where the picker fell back
+/// to. Still read, after herdr's, so a table kept there keeps working.
+fn legacy_config_path() -> PathBuf {
     home_dir()
         .join(".config")
         .join("herdr-estate")
@@ -149,36 +160,70 @@ GREETING = "hi"
         assert_eq!(config_path(), p);
     }
 
+    /// Write the estate table at `home`'s legacy path and return it.
+    fn write_legacy(home: &Path) -> PathBuf {
+        let p = home
+            .join(".config")
+            .join("herdr-estate")
+            .join("estates.toml");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, ESTATES_TOML).unwrap();
+        p
+    }
+
     #[test]
-    fn config_path_falls_back_when_plugin_config_dir_file_missing() {
+    fn a_legacy_table_is_read_when_herdrs_config_dir_has_none() {
+        // The picker on a machine whose table predates this: herdr
+        // hands an empty config dir, and the table at the old path
+        // keeps working.
         let d = TempDir::new();
         let home = TempDir::new();
+        let legacy = write_legacy(home.path());
         let _g = EnvGuard::set(&[
             ("HERDR_PLUGIN_CONFIG_DIR", d.path().to_str().unwrap()),
             ("HOME", home.path().to_str().unwrap()),
         ]);
-        assert_eq!(
-            config_path(),
-            home.path()
-                .join(".config")
-                .join("herdr-estate")
-                .join("estates.toml")
-        );
+        assert_eq!(config_path(), legacy);
     }
 
     #[test]
-    fn config_path_falls_back_when_plugin_config_dir_unset() {
+    fn a_shell_run_reads_the_table_in_herdrs_config_dir_first() {
+        let home = TempDir::new();
+        write_legacy(home.path());
+        let herdrs = home
+            .path()
+            .join(".config/herdr/plugins/config/herdr-estate/estates.toml");
+        std::fs::create_dir_all(herdrs.parent().unwrap()).unwrap();
+        std::fs::write(&herdrs, ESTATES_TOML).unwrap();
+        let _g = EnvGuard::new(
+            &[("HOME", home.path().to_str().unwrap())],
+            &["HERDR_PLUGIN_CONFIG_DIR", "XDG_CONFIG_HOME"],
+        );
+        assert_eq!(config_path(), herdrs);
+    }
+
+    #[test]
+    fn a_shell_run_falls_back_to_the_legacy_table() {
+        let home = TempDir::new();
+        let legacy = write_legacy(home.path());
+        let _g = EnvGuard::new(
+            &[("HOME", home.path().to_str().unwrap())],
+            &["HERDR_PLUGIN_CONFIG_DIR", "XDG_CONFIG_HOME"],
+        );
+        assert_eq!(config_path(), legacy);
+    }
+
+    #[test]
+    fn with_no_table_anywhere_herdrs_path_is_the_one_named() {
         let home = TempDir::new();
         let _g = EnvGuard::new(
             &[("HOME", home.path().to_str().unwrap())],
-            &["HERDR_PLUGIN_CONFIG_DIR"],
+            &["HERDR_PLUGIN_CONFIG_DIR", "XDG_CONFIG_HOME"],
         );
         assert_eq!(
             config_path(),
             home.path()
-                .join(".config")
-                .join("herdr-estate")
-                .join("estates.toml")
+                .join(".config/herdr/plugins/config/herdr-estate/estates.toml")
         );
     }
 }

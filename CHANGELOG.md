@@ -13,6 +13,11 @@
   still holds in the popup, as does herdr's own error for a run that
   never started. The popup waits on the run for at most 120 seconds,
   then names its plugin log entry.
+- A shell run now finds the estate table where the picker does, in
+  herdr's config dir for the plugin
+  (`~/.config/herdr/plugins/config/herdr-estate/estates.toml` by
+  default). `~/.config/herdr-estate/estates.toml` is still read when
+  that file isn't there, so an existing table needs no move.
 - A refused `resume` or `fresh` no longer creates the campaign's
   worktree first. The worktree is created once every guard has passed,
   just before `prepare` runs in it.
