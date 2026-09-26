@@ -65,6 +65,29 @@ fn version_prints_the_package_version_and_writes_no_events_log() {
 }
 
 #[test]
+fn help_prints_every_verb_and_writes_no_events_log() {
+    let (f, _root) = fixture();
+    for argv in [
+        &["--help"][..],
+        &["-h"],
+        &["resume", "--help"],
+        &["pick", "-h"],
+    ] {
+        let out = run(&f, argv, &[]);
+        assert!(out.status.success(), "{argv:?}: {}", stderr(&out));
+        let text = stdout(&out);
+        assert!(text.starts_with("usage: herdr-estate <verb>"), "{text}");
+        for verb in [
+            "resume", "fresh", "list", "create", "pick", "--width", "--height",
+        ] {
+            assert!(text.contains(verb), "{verb} missing from {text}");
+        }
+        assert_eq!(f.fake.call_count(), 0);
+        assert!(!f.state_dir.join("events.log").exists());
+    }
+}
+
+#[test]
 fn list_rejects_a_dry_run_flag_it_does_not_take() {
     let (f, _root) = fixture();
     let out = run(&f, &["list", "--dry-run"], &[]);

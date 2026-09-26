@@ -13,6 +13,8 @@
   still holds in the popup, as does herdr's own error for a run that
   never started. The popup waits on the run for at most 120 seconds,
   then names its plugin log entry.
+- `--help` and `-h` print the verbs and their flags, and write
+  nothing to `events.log`.
 - A shell run now finds the estate table where the picker does, in
   herdr's config dir for the plugin
   (`~/.config/herdr/plugins/config/herdr-estate/estates.toml` by

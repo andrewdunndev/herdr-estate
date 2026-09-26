@@ -103,7 +103,8 @@ so the agent can still reach `log.md`.
   `campaign.md` and `log.md`, uncommitted.
 
 With no address, the current workspace's label is used. `--dry-run`
-prints the plan and changes nothing; it needs an address. Progress and
+prints the plan and changes nothing; it needs an address. `--help`
+lists the verbs and their flags. Progress and
 the run log: [docs/events.md](docs/events.md).
 
 ## Picker
@@ -141,7 +142,8 @@ cargo fmt --check && cargo clippy --release --all-targets --all-features -- -D w
 
 `plugin link` skips `[[build]]`; a rebuild takes effect on herdr's
 next call. Tests drive a fake herdr through `$HERDR_BIN_PATH`.
-`pick --render-once` prints one frame. When a row's workspace is the
+`pick --render-once` prints one frame, 80x20 unless `--width` and
+`--height` say otherwise. When a row's workspace is the
 popup's own, the popup hands it to a `dispatch-*` action, which runs
 `pick --dispatch`, over the API socket herdr names in
 `HERDR_SOCKET_PATH`.

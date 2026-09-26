@@ -14,6 +14,30 @@ use crate::verbs;
 pub const PICK_DEFAULT_WIDTH: usize = 80;
 pub const PICK_DEFAULT_HEIGHT: usize = 20;
 
+/// What `--help` or `-h` prints.
+pub const USAGE: &str = "\
+usage: herdr-estate <verb> [options]
+
+  resume [<address>] [--dry-run]    continue the latest conversation, or
+                                    start fresh if none is on record
+  fresh [<address>] [--dry-run]     retire the latest conversation and
+                                    start a new one
+  list                              every campaign in the estate table
+  create <address> --brief <text> [--dry-run]
+                                    write a new campaign's campaign.md
+                                    and log.md, uncommitted
+  pick                              the campaign picker; inside herdr it
+                                    opens as a popup
+  pick --render-once [--width <n>] [--height <n>]
+                                    print one frame, 80x20 by default
+
+With no address, the current workspace's label is used; --dry-run
+prints the plan, changes nothing, and needs an address.
+
+  -h, --help       print this and exit
+  -V, --version    print the version and exit
+";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Resume {
@@ -270,12 +294,16 @@ fn dispatch(cmd: Command) -> Result<i32, EstateError> {
 /// `EstateError` (printed as `herdr-estate: <message>` to stderr), 2 on
 /// a usage error in the arguments themselves.
 pub fn run(argv: &[String]) -> i32 {
-    // Ahead of the log line below: a version check is not a run and
-    // writes nothing to events.log.
+    // Ahead of the log line below: a version check or a help request
+    // is not a run and writes nothing to events.log.
     if argv.first().map(String::as_str) == Some("--version")
         || argv.first().map(String::as_str) == Some("-V")
     {
         println!("herdr-estate {}", env!("CARGO_PKG_VERSION"));
+        return 0;
+    }
+    if argv.iter().any(|a| a == "--help" || a == "-h") {
+        print!("{USAGE}");
         return 0;
     }
     // Every run opens with one log line naming its argv and how herdr
