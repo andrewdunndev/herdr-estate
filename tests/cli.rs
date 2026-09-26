@@ -656,18 +656,20 @@ fn a_launch_killed_while_holding_the_lock_frees_it_at_once() {
 
     holder.kill().unwrap();
     holder.wait().unwrap();
-    if let Ok(pid) = std::fs::read_to_string(&sleeper) {
-        let _ = Command::new("kill").arg(pid.trim()).status();
-    }
     std::fs::remove_file(&hold).unwrap();
     let at = std::time::Instant::now();
     let out = launch().output().unwrap();
+    let elapsed = at.elapsed();
+    let sleeper_pid = std::fs::read_to_string(&sleeper).unwrap_or_default();
+    let orphan_alive = Command::new("kill")
+        .args(["-0", sleeper_pid.trim()])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    let _ = Command::new("kill").arg(sleeper_pid.trim()).status();
+    assert!(orphan_alive, "the orphaned prepare should still be running");
     assert!(out.status.success(), "{}", stderr(&out));
-    assert!(
-        at.elapsed() < std::time::Duration::from_secs(5),
-        "{:?}",
-        at.elapsed()
-    );
+    assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
 }
 
 #[test]
