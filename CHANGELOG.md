@@ -25,6 +25,10 @@
   takes a lock for its campaign in the state dir, and the second one
   refuses, naming the first one's pid, until the first finishes. A lock
   left by a run that died is taken over.
+- Launches of different addresses at once no longer drop each other's
+  records from `owned.json`. Every change to it holds `owned.lock`
+  beside it, and a launch prunes only records that existed before its
+  workspace listing was read.
 - `--help` and `-h` print the verbs and their flags, and write
   nothing to `events.log`.
 - A shell run now finds the estate table where the picker does, in

@@ -63,13 +63,19 @@ pub fn is_ours(workspace_id: &str) -> bool {
     load().contains_key(workspace_id)
 }
 
+pub fn ids() -> BTreeSet<String> {
+    load().into_keys().collect()
+}
+
 pub fn record(address: &str, workspace_id: &str) -> std::io::Result<()> {
+    let _held = crate::lock::hold_owned()?;
     let mut records = load();
     records.insert(workspace_id.to_string(), address.to_string());
     save(&records)
 }
 
 pub fn forget(workspace_id: &str) -> std::io::Result<()> {
+    let _held = crate::lock::hold_owned()?;
     let mut records = load();
     if records.remove(workspace_id).is_some() {
         save(&records)?;
@@ -77,11 +83,17 @@ pub fn forget(workspace_id: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn prune(existing_ids: &BTreeSet<String>) -> std::io::Result<()> {
+pub fn prune(
+    existing_ids: &BTreeSet<String>,
+    recorded_before_listing: &BTreeSet<String>,
+) -> std::io::Result<()> {
+    let _held = crate::lock::hold_owned()?;
     let records = load();
     let kept: BTreeMap<String, String> = records
         .iter()
-        .filter(|(k, _)| existing_ids.contains(k.as_str()))
+        .filter(|(k, _)| {
+            existing_ids.contains(k.as_str()) || !recorded_before_listing.contains(k.as_str())
+        })
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     if kept != records {
@@ -169,7 +181,18 @@ mod tests {
         let (_d, _g) = isolated();
         record("home/garden", "w1").unwrap();
         record("home/taxes", "w2").unwrap();
-        prune(&BTreeSet::from(["w2".to_string()])).unwrap();
+        prune(&BTreeSet::from(["w2".to_string()]), &ids()).unwrap();
+        assert!(!is_ours("w1"));
+        assert!(is_ours("w2"));
+    }
+
+    #[test]
+    fn prune_keeps_a_record_made_after_its_listing_was_taken() {
+        let (_d, _g) = isolated();
+        record("home/garden", "w1").unwrap();
+        let before = ids();
+        record("home/attic", "w2").unwrap();
+        prune(&BTreeSet::new(), &before).unwrap();
         assert!(!is_ours("w1"));
         assert!(is_ours("w2"));
     }
@@ -178,7 +201,7 @@ mod tests {
     fn prune_keeps_everything_when_all_still_exist() {
         let (_d, _g) = isolated();
         record("home/garden", "w1").unwrap();
-        prune(&BTreeSet::from(["w1".to_string()])).unwrap();
+        prune(&BTreeSet::from(["w1".to_string()]), &ids()).unwrap();
         assert!(is_ours("w1"));
     }
 

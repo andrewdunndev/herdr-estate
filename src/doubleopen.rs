@@ -110,10 +110,11 @@ pub fn transcript_exists(conversation_id: &str) -> bool {
 }
 
 pub fn live_workspace(address: &str) -> Result<Option<Workspace>, EstateError> {
+    let recorded_before_listing = ownership::ids();
     let workspaces = herdrcli::workspace_list()?;
     let existing_ids: BTreeSet<String> =
         workspaces.iter().map(|w| w.workspace_id.clone()).collect();
-    ownership::prune(&existing_ids)
+    ownership::prune(&existing_ids, &recorded_before_listing)
         .map_err(|e| EstateError::Config(format!("could not update the ownership record: {e}")))?;
     let mut matching: Vec<Workspace> = workspaces
         .into_iter()

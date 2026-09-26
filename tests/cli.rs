@@ -523,6 +523,82 @@ fn two_concurrent_launches_of_one_address_create_one_workspace() {
     );
 }
 
+const STATEFUL_HERDR: &str = r#"#!/bin/sh
+D="$(cd "$(dirname "$0")" && pwd)"
+case "$1 $2" in
+"workspace list")
+  printf '{"result":{"workspaces":['
+  sep=""
+  if [ -f "$D/ws" ]; then
+    while read -r id label; do
+      printf '%s{"workspace_id":"%s","label":"%s","agent_status":"idle","pane_count":1}' "$sep" "$id" "$label"
+      sep=","
+    done < "$D/ws"
+  fi
+  printf ']}}\n' ;;
+"workspace create")
+  prev=""; label=""
+  for a in "$@"; do [ "$prev" = "--label" ] && label="$a"; prev="$a"; done
+  id="w$$"
+  echo "$id $label" >> "$D/ws"
+  printf '{"result":{"workspace":{"workspace_id":"%s"},"root_pane":{"pane_id":"%s:p1"}}}\n' "$id" "$id" ;;
+*) echo '{"result":{}}' ;;
+esac
+"#;
+
+#[test]
+fn concurrent_launches_of_different_addresses_keep_every_ownership_record() {
+    let names = ["garden", "attic", "cellar", "kitchen", "shed", "loft"];
+    let (f, root) = fixture();
+    for name in names {
+        make_campaign(&root, name, "---\n---\n");
+    }
+    write_estate_toml(
+        &f.config_dir,
+        &format!(
+            "[estate.home]\nroot = {:?}\nprepare = [\"/bin/sleep\", \"1\"]\n",
+            root.to_string_lossy()
+        ),
+    );
+    let fake_dir = root.parent().unwrap().join("stateful-herdr");
+    std::fs::create_dir_all(&fake_dir).unwrap();
+    let script = fake_dir.join("herdr");
+    std::fs::write(&script, STATEFUL_HERDR).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let children: Vec<_> = names
+        .iter()
+        .map(|name| {
+            Command::new(env!("CARGO_BIN_EXE_herdr-estate"))
+                .args(["fresh", &format!("home/{name}")])
+                .env_clear()
+                .env("HOME", &f.home)
+                .env("HERDR_PLUGIN_CONFIG_DIR", &f.config_dir)
+                .env("HERDR_PLUGIN_STATE_DIR", &f.state_dir)
+                .env("HERDR_BIN_PATH", &script)
+                .env("PATH", "/usr/bin:/bin")
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    for child in children {
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success(), "{}", stderr(&out));
+    }
+    let owned: std::collections::BTreeMap<String, String> =
+        serde_json::from_str(&std::fs::read_to_string(f.state_dir.join("owned.json")).unwrap())
+            .unwrap();
+    let mut addresses: Vec<&str> = owned.values().map(String::as_str).collect();
+    addresses.sort_unstable();
+    let mut want: Vec<String> = names.iter().map(|n| format!("home/{n}")).collect();
+    want.sort_unstable();
+    assert_eq!(addresses, want, "{owned:?}");
+}
+
 #[test]
 fn address_derived_from_herdr_workspace_id_when_omitted() {
     let (f, root) = fixture();
