@@ -100,6 +100,7 @@ mod tests {
             workdir: PathBuf::from("/tmp/home"),
             kind: AgentKind::Claude,
             add_dirs: Vec::new(),
+            missing_add_dirs: Vec::new(),
             prompt_files: Vec::new(),
             kind_flags: BTreeMap::new(),
             env: BTreeMap::new(),

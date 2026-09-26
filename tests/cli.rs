@@ -293,6 +293,74 @@ fn fresh_dry_run_no_close_line_without_a_live_workspace() {
 }
 
 #[test]
+fn a_missing_path_is_in_the_dry_run_plan_and_never_in_the_log() {
+    let (f, root) = fixture();
+    let absent = root.join("no-such-dir");
+    make_campaign(
+        &root,
+        "garden",
+        &format!("---\npaths: [{}]\n---\n", absent.display()),
+    );
+    f.fake
+        .set_response(0, r#"{"result": {"workspaces": []}}"#, 0);
+    let out = run(&f, &["fresh", "home/garden", "--dry-run"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains(&format!(
+            "would skip, not there:\n  add-dir {}\n",
+            absent.display()
+        )),
+        "{}",
+        stdout(&out)
+    );
+    assert!(!stderr(&out).contains("add-dir"), "{}", stderr(&out));
+    let events = std::fs::read_to_string(f.state_dir.join("events.log")).unwrap();
+    assert_eq!(events.lines().count(), 1, "only the run line: {events}");
+}
+
+#[test]
+fn a_missing_path_is_reported_once_the_run_passes_its_guards() {
+    let (f, root) = fixture();
+    let absent = root.join("no-such-dir");
+    make_campaign(
+        &root,
+        "garden",
+        &format!("---\npaths: [{}]\n---\n", absent.display()),
+    );
+    // Refused on a running agent: nothing about the path is said.
+    f.fake.set_response(
+        0,
+        r#"{"result": {"workspaces": [
+            {"workspace_id": "w1", "label": "home/garden", "agent_status": "working"}
+        ]}}"#,
+        0,
+    );
+    let out = run(&f, &["fresh", "home/garden"], &[]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(!stderr(&out).contains("add-dir"), "{}", stderr(&out));
+
+    // Past the guards, the skip is one progress line before the create.
+    f.fake
+        .set_response(1, r#"{"result": {"workspaces": []}}"#, 0);
+    f.fake.set_response(
+        2,
+        r#"{"result": {"workspace": {"workspace_id": "w9"}, "root_pane": {"pane_id": "w9:p1"}}}"#,
+        0,
+    );
+    f.fake.set_response(3, r#"{"result": {}}"#, 0);
+    let out = run(&f, &["fresh", "home/garden"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let err = stderr(&out);
+    let skip = err
+        .find(&format!(
+            "add-dir {} does not exist, skipping",
+            absent.display()
+        ))
+        .unwrap_or_else(|| panic!("{err}"));
+    assert!(skip < err.find("creating a workspace").unwrap(), "{err}");
+}
+
+#[test]
 fn address_derived_from_herdr_workspace_id_when_omitted() {
     let (f, root) = fixture();
     make_campaign(&root, "garden", "---\n---\n");

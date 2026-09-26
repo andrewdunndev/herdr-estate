@@ -44,6 +44,11 @@ pub struct Campaign {
     pub workdir: PathBuf,
     pub kind: AgentKind,
     pub add_dirs: Vec<PathBuf>,
+    /// `paths` entries left out of `add_dirs` because nothing is there
+    /// (moved, renamed, never checked out). Resolving says nothing about
+    /// them: the verbs report them once their guards have passed, and a
+    /// dry run prints them in its plan.
+    pub missing_add_dirs: Vec<PathBuf>,
     pub prompt_files: Vec<PathBuf>,
     pub kind_flags: BTreeMap<String, Scalar>,
     pub env: BTreeMap<String, String>,
@@ -232,21 +237,18 @@ pub fn resolve(
     let estate_paths = non_empty_strings(toml_str_array(row, "paths"));
     let campaign_paths = non_empty_strings(frontmatter_str_list(&fm, "paths"));
     let mut add_dirs: Vec<PathBuf> = Vec::new();
+    let mut missing_add_dirs: Vec<PathBuf> = Vec::new();
     for p in estate_paths.iter().chain(campaign_paths.iter()) {
         let rp = rooted(&root, p);
-        if add_dirs.contains(&rp) {
+        if add_dirs.contains(&rp) || missing_add_dirs.contains(&rp) {
             continue;
         }
         // A path an operator's estate or campaign named but that isn't
-        // there (moved, renamed, never checked out) would otherwise
-        // reach the agent's `--add-dir` and fail the launch outright;
-        // skip it and say so, rather than let one stale entry block the
-        // whole campaign.
+        // there would otherwise reach the agent's `--add-dir` and fail
+        // the launch outright; skip it, and let the verb say so, rather
+        // than let one stale entry block the whole campaign.
         if !rp.exists() {
-            crate::progress::step(&format!(
-                "{address}: add-dir {} does not exist, skipping",
-                rp.display()
-            ));
+            missing_add_dirs.push(rp);
             continue;
         }
         add_dirs.push(rp);
@@ -314,6 +316,7 @@ pub fn resolve(
         workdir,
         kind,
         add_dirs,
+        missing_add_dirs,
         prompt_files,
         kind_flags,
         env,
@@ -776,7 +779,7 @@ mod tests {
     }
 
     #[test]
-    fn absent_add_dir_is_skipped_with_a_warning_present_one_is_kept() {
+    fn absent_add_dir_is_set_aside_unannounced_present_one_is_kept() {
         let d = TempDir::new();
         let root = d.path().join("home");
         let present = d.path().join("present");
@@ -799,13 +802,10 @@ mod tests {
         )]);
         let c = resolve(&estates, "home/garden", false).unwrap();
         assert_eq!(c.add_dirs, [present]);
-        assert_eq!(
-            crate::progress::logged_messages(),
-            vec![format!(
-                "home/garden: add-dir {} does not exist, skipping",
-                absent.display()
-            )]
-        );
+        assert_eq!(c.missing_add_dirs, [absent]);
+        // Resolving runs before every guard and under --dry-run, so it
+        // logs nothing; the verb reports the skip once it proceeds.
+        assert!(crate::progress::logged_messages().is_empty());
     }
 
     #[test]

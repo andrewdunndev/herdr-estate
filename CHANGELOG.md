@@ -13,6 +13,10 @@
   still holds in the popup, as does herdr's own error for a run that
   never started. The popup waits on the run for at most 120 seconds,
   then names its plugin log entry.
+- A `paths` entry that doesn't exist is reported once the launch has
+  passed its guards and `prepare`, not while the campaign resolves.
+  `--dry-run` and a refused launch no longer write that warning to
+  `events.log`; a dry run lists the path in its plan.
 - An estate's `prepare` that runs past 60 seconds is killed and the
   launch refused, where a hung one used to hang `resume`, `fresh` and
   the picker with it.

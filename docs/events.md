@@ -32,7 +32,9 @@ they can't dismiss it unread.
 
 `--dry-run`, and any refusal made before something changes, print no
 progress lines. A close that can't be confirmed is refused after its
-`closing` line, and nothing is created.
+`closing` line, and nothing is created. A `paths` entry that isn't
+there gets one line once `prepare` has passed, just before any close;
+a dry run lists it in its plan instead.
 
 ## events.log
 

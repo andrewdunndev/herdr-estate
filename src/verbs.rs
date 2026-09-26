@@ -259,11 +259,18 @@ fn shlex_join(argv: &[String]) -> String {
 }
 
 fn print_plan(
+    missing_add_dirs: &[std::path::PathBuf],
     prepare_cmd: Option<&[String]>,
     create_cmd: &[String],
     agent_cmd: &[String],
     close_cmd: Option<&[String]>,
 ) {
+    if !missing_add_dirs.is_empty() {
+        println!("would skip, not there:");
+        for dir in missing_add_dirs {
+            println!("  add-dir {}", dir.display());
+        }
+    }
     if let Some(prepare) = prepare_cmd {
         println!("would prepare:");
         println!("  {}", shlex_join(prepare));
@@ -527,6 +534,12 @@ fn open_workspace(
     if let Some(argv) = &campaign.prepare {
         run_prepare(campaign, address, argv)?;
     }
+    for dir in &campaign.missing_add_dirs {
+        progress::step(&format!(
+            "{address}: add-dir {} does not exist, skipping",
+            dir.display()
+        ));
+    }
     if let Some(ws) = ws {
         progress::step(&format!(
             "{address}: closing {}, {close_reason}",
@@ -606,6 +619,7 @@ fn short(id: &str) -> String {
 /// thing dry run never does; for that case alone the "would close" line
 /// stands as printed, with nothing extra said about it.
 fn dry_run_plan(
+    campaign: &Campaign,
     address: &str,
     ws: Option<&Workspace>,
     prepare_cmd: Option<&[String]>,
@@ -630,6 +644,7 @@ fn dry_run_plan(
         }
     };
     print_plan(
+        &campaign.missing_add_dirs,
         prepare_cmd,
         create_cmd_redacted,
         start_cmd,
@@ -690,6 +705,7 @@ pub(crate) fn resume_with_ids(
 
     if dry_run {
         let exit_code = dry_run_plan(
+            &campaign,
             address,
             ws.as_ref(),
             campaign.prepare.as_deref(),
@@ -840,6 +856,7 @@ fn fresh_open(
 
     if dry_run {
         let exit_code = dry_run_plan(
+            campaign,
             address,
             ws.as_ref(),
             campaign.prepare.as_deref(),
@@ -1099,6 +1116,7 @@ mod tests {
             workdir: dir.to_path_buf(),
             kind,
             add_dirs: Vec::new(),
+            missing_add_dirs: Vec::new(),
             prompt_files: Vec::new(),
             kind_flags: BTreeMap::new(),
             env: BTreeMap::from([("K".to_string(), "V".to_string())]),
@@ -1569,6 +1587,7 @@ mod tests {
             workdir: workdir.to_path_buf(),
             kind: AgentKind::Claude,
             add_dirs: Vec::new(),
+            missing_add_dirs: Vec::new(),
             prompt_files: Vec::new(),
             kind_flags: Default::default(),
             env: Default::default(),
