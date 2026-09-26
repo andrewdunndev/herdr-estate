@@ -70,9 +70,10 @@ fn open_live(estates: &toml::Table, address: &str) -> Result<String, EstateError
     }
 }
 
-/// `pick --dispatch <action> <address>`: what the popup's row asked
-/// for, run by the process `detach::hand_off` started in a session of
-/// its own, because the row's workspace is the popup's. The row was
+/// `pick --dispatch <action>`: what the popup's row asked for, run by
+/// the herdr action `detach::hand_off` invoked, because the row's
+/// workspace is the popup's; `address` is that invocation context's
+/// workspace label. The row was
 /// Live when the popup chose it, so `open` takes the Live row's path;
 /// `fresh` and `stop` never read the row's state at all.
 pub fn run_action(

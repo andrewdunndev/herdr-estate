@@ -314,7 +314,15 @@ fn a_handed_off_refusal_exits_1_and_leaves_its_error_in_the_log() {
         ]}}"#,
         0,
     );
-    let out = run(&f, &["pick", "--dispatch", "stop", "home/garden"], &[]);
+    let context = r#"{"workspace_id":"w1","workspace_label":"home/garden"}"#;
+    let out = run(
+        &f,
+        &["pick", "--dispatch", "stop"],
+        &[
+            ("HERDR_PLUGIN_ACTION_ID", "dispatch-stop"),
+            ("HERDR_PLUGIN_CONTEXT_JSON", context),
+        ],
+    );
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(f.fake.call_count(), 1);
     assert!(
@@ -324,7 +332,10 @@ fn a_handed_off_refusal_exits_1_and_leaves_its_error_in_the_log() {
     );
     let events = std::fs::read_to_string(f.state_dir.join("events.log")).unwrap();
     let lines: Vec<&str> = events.lines().collect();
-    assert!(lines[0].ends_with(" run: herdr-estate pick --dispatch stop home/garden (shell)"));
+    assert!(
+        lines[0].ends_with(" run: herdr-estate pick --dispatch stop (herdr action dispatch-stop)"),
+        "{events}"
+    );
     assert!(
         lines.last().unwrap().contains(" error: home/garden:"),
         "{events}"
