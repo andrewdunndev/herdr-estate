@@ -5,7 +5,7 @@
   reason: |
     Covered by the dunn.dev group-level pipeline cascade
     (only_allow_merge_if_pipeline_succeeds: true at the group), which
-    outranks this project-level flag — see repository/CONTRACT.md's
+    outranks this project-level flag; see repository/CONTRACT.md's
     Deviations section. The group cascade reads true; the project flag
     reads false.
   owner: andrew@dunn.dev

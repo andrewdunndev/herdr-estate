@@ -1,39 +1,30 @@
-//! The estate table: estates.toml, and the address it's keyed by.
-
 use std::path::{Path, PathBuf};
 
 use crate::errors::EstateError;
-use crate::paths::home_dir;
+use crate::paths::{home_dir, plugin_config_dir};
 
 pub const DEFAULT_CAMPAIGNS_DIR: &str = "campaigns";
 pub const DEFAULT_AGENT_KIND: &str = "claude";
 
-fn non_empty_env(key: &str) -> Option<String> {
-    match std::env::var(key) {
-        Ok(v) if !v.is_empty() => Some(v),
-        _ => None,
+pub fn config_path() -> PathBuf {
+    let herdrs = plugin_config_dir().join("estates.toml");
+    if herdrs.is_file() {
+        return herdrs;
     }
+    let legacy = legacy_config_path();
+    if legacy.is_file() {
+        return legacy;
+    }
+    herdrs
 }
 
-/// `$HERDR_PLUGIN_CONFIG_DIR/estates.toml` when herdr sets that (running
-/// as a plugin action) and the file is actually there; otherwise the
-/// fallback a bare shell invocation uses.
-pub fn config_path() -> PathBuf {
-    if let Some(d) = non_empty_env("HERDR_PLUGIN_CONFIG_DIR") {
-        let p = PathBuf::from(d).join("estates.toml");
-        if p.is_file() {
-            return p;
-        }
-    }
+fn legacy_config_path() -> PathBuf {
     home_dir()
         .join(".config")
         .join("herdr-estate")
         .join("estates.toml")
 }
 
-/// `{estate_name: estate_row}` from estates.toml's `[estate.*]` tables.
-/// `path` overrides `config_path()` — used by tests and by a caller that
-/// already resolved a path.
 pub fn load_estates(path: Option<&Path>) -> Result<toml::Table, EstateError> {
     let p = match path {
         Some(p) => p.to_path_buf(),
@@ -60,8 +51,6 @@ pub fn load_estates(path: Option<&Path>) -> Result<toml::Table, EstateError> {
     }
 }
 
-/// Split `estate/campaign` on the FIRST `/`; anything after further
-/// slashes stays part of the campaign name.
 pub fn parse_address(address: &str) -> Result<(String, String), EstateError> {
     match address.split_once('/') {
         Some((estate, campaign)) if !estate.is_empty() && !campaign.is_empty() => {
@@ -156,47 +145,66 @@ GREETING = "hi"
         assert_eq!(config_path(), p);
     }
 
+    fn write_legacy(home: &Path) -> PathBuf {
+        let p = home
+            .join(".config")
+            .join("herdr-estate")
+            .join("estates.toml");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, ESTATES_TOML).unwrap();
+        p
+    }
+
     #[test]
-    fn config_path_falls_back_when_plugin_config_dir_file_missing() {
+    fn a_legacy_table_is_read_when_herdrs_config_dir_has_none() {
         let d = TempDir::new();
         let home = TempDir::new();
+        let legacy = write_legacy(home.path());
         let _g = EnvGuard::set(&[
             ("HERDR_PLUGIN_CONFIG_DIR", d.path().to_str().unwrap()),
             ("HOME", home.path().to_str().unwrap()),
         ]);
-        assert_eq!(
-            config_path(),
-            home.path()
-                .join(".config")
-                .join("herdr-estate")
-                .join("estates.toml")
+        assert_eq!(config_path(), legacy);
+    }
+
+    #[test]
+    fn a_shell_run_reads_the_table_in_herdrs_config_dir_first() {
+        let home = TempDir::new();
+        write_legacy(home.path());
+        let herdrs = home
+            .path()
+            .join(".config/herdr/plugins/config/herdr-estate/estates.toml");
+        std::fs::create_dir_all(herdrs.parent().unwrap()).unwrap();
+        std::fs::write(&herdrs, ESTATES_TOML).unwrap();
+        let _g = EnvGuard::new(
+            &[("HOME", home.path().to_str().unwrap())],
+            &["HERDR_PLUGIN_CONFIG_DIR", "XDG_CONFIG_HOME"],
         );
+        assert_eq!(config_path(), herdrs);
     }
 
     #[test]
-    fn empty_env_value_counts_as_unset() {
-        // Mirrors paths.rs's test of the same name for this module's own
-        // copy of the same truthiness rule. Direct, not routed through
-        // config_path()'s is_file() gate — that gate would swallow the
-        // difference on a test machine with no ./estates.toml in the
-        // working directory either way.
-        let _g = EnvGuard::set(&[("HERDR_ESTATE_TEST_EMPTY", "")]);
-        assert_eq!(non_empty_env("HERDR_ESTATE_TEST_EMPTY"), None);
+    fn a_shell_run_falls_back_to_the_legacy_table() {
+        let home = TempDir::new();
+        let legacy = write_legacy(home.path());
+        let _g = EnvGuard::new(
+            &[("HOME", home.path().to_str().unwrap())],
+            &["HERDR_PLUGIN_CONFIG_DIR", "XDG_CONFIG_HOME"],
+        );
+        assert_eq!(config_path(), legacy);
     }
 
     #[test]
-    fn config_path_falls_back_when_plugin_config_dir_unset() {
+    fn with_no_table_anywhere_herdrs_path_is_the_one_named() {
         let home = TempDir::new();
         let _g = EnvGuard::new(
             &[("HOME", home.path().to_str().unwrap())],
-            &["HERDR_PLUGIN_CONFIG_DIR"],
+            &["HERDR_PLUGIN_CONFIG_DIR", "XDG_CONFIG_HOME"],
         );
         assert_eq!(
             config_path(),
             home.path()
-                .join(".config")
-                .join("herdr-estate")
-                .join("estates.toml")
+                .join(".config/herdr/plugins/config/herdr-estate/estates.toml")
         );
     }
 }

@@ -1,16 +1,3 @@
-//! What herdr-estate says while it works. Every step that changes the
-//! board prints one line to stderr and appends the same line, timestamped,
-//! to `events.log` in the state dir.
-//!
-//! The two sinks cover the two ways this binary runs. In the picker popup
-//! or a shell, stderr is the terminal: `agent start` blocks until the
-//! agent is ready for input, several seconds for claude, and with nothing
-//! on screen that wait reads as a hang. Run as a herdr plugin action there
-//! is no terminal: herdr keeps that run's output in `herdr plugin log
-//! list`, but nothing records a picker popup's run once it closes. The
-//! log is the one record that spans every launch path, one timestamped
-//! line per step.
-
 use std::fmt::Display;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -22,41 +9,24 @@ use crate::paths::{non_empty_env, state_dir};
 
 pub const LOG_FILE_NAME: &str = "events.log";
 
-/// `events.log` under `paths::state_dir()`: herdr's per-plugin state dir
-/// whether herdr ran this binary or a shell did — both resolve to the
-/// same directory.
 pub fn log_path() -> PathBuf {
     state_dir().join(LOG_FILE_NAME)
 }
 
-/// One step: `herdr-estate: <msg>` on stderr, then the same text in the
-/// log.
 pub fn step(msg: &str) {
     say(&format!("herdr-estate: {msg}"));
     append(msg);
 }
 
-/// A failure the run is about to exit on, printed the way `cli::run` has
-/// always printed one (`herdr-estate: <message>`) and logged as
-/// `error: <message>`, so the log shows where a run stopped.
 pub fn report_error(err: &dyn Display) {
     say(&format!("herdr-estate: {err}"));
     append(&format!("error: {err}"));
 }
 
-/// One line to stderr that can never panic. `eprintln!` panics when the
-/// write fails (a closed pipe, say), and a step runs between `workspace
-/// create` and `agent start`: a line nobody can read is never worth
-/// stopping a verb halfway.
 fn say(line: &str) {
     let _ = writeln!(std::io::stderr(), "{line}");
 }
 
-/// How this process was started, from the variables herdr sets on each
-/// of its launch paths: an action gets `HERDR_PLUGIN_ACTION_ID`, a plugin
-/// pane (the picker popup) gets `HERDR_PLUGIN_ENTRYPOINT_ID`, and a
-/// shell sets neither. The log's run line carries it, because the same
-/// argv (`pick`) behaves differently on each path.
 pub fn launched_via() -> String {
     if let Some(id) = non_empty_env("HERDR_PLUGIN_ACTION_ID") {
         return format!("herdr action {id}");
@@ -67,16 +37,7 @@ pub fn launched_via() -> String {
     "shell".to_string()
 }
 
-/// Append `<time> <msg>` to the log, newlines folded to ` | ` so one
-/// event is always one line (a herdr failure's message carries its
-/// stderr). Created owner-only (0600): error text lands here, and a
-/// herdr failure echoes herdr's own output. Best-effort by design: a
-/// state dir that can't be created or written never fails the verb
-/// reporting through it, since the verb's own result still stands.
 pub(crate) fn append(msg: &str) {
-    // A test that reaches this with no scratch state dir would write the
-    // operator's real events.log, the way an unguarded test once wrote
-    // the real owned.json. Fail that test instead.
     #[cfg(test)]
     assert!(
         non_empty_env("HERDR_PLUGIN_STATE_DIR").is_some(),
@@ -97,8 +58,6 @@ pub(crate) fn append(msg: &str) {
     }
 }
 
-/// The log's lines with their timestamps stripped, oldest first — what
-/// a test compares against. Empty when there is no log yet.
 #[cfg(test)]
 pub(crate) fn logged_messages() -> Vec<String> {
     std::fs::read_to_string(log_path())
@@ -122,7 +81,6 @@ mod tests {
         let raw = std::fs::read_to_string(d.path().join(LOG_FILE_NAME)).unwrap();
         let lines: Vec<&str> = raw.lines().collect();
         assert_eq!(lines.len(), 2);
-        // `<ISO UTC time> <message>`: the continuity log's timestamp shape.
         assert!(lines[0].ends_with(" first"));
         assert!(lines[0].contains('T') && lines[0].contains("+00:00 "));
         assert!(lines[1].ends_with(" second"));
@@ -163,8 +121,6 @@ mod tests {
 
     #[test]
     fn append_to_an_unwritable_state_dir_does_not_panic() {
-        // The state dir path is an existing *file*: create_dir_all and
-        // open both fail, and the step must still return normally.
         let d = TempDir::new();
         let blocker = d.path().join("a-file");
         std::fs::write(&blocker, "x").unwrap();

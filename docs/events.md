@@ -32,7 +32,9 @@ they can't dismiss it unread.
 
 `--dry-run`, and any refusal made before something changes, print no
 progress lines. A close that can't be confirmed is refused after its
-`closing` line, and nothing is created.
+`closing` line, and nothing is created. A `paths` entry that isn't
+there gets one line once `prepare` has passed, just before any close;
+a dry run lists it in its plan instead.
 
 ## events.log
 
@@ -45,12 +47,14 @@ covers every launch path, one timestamped line per step.
 
 The state dir is `$HERDR_PLUGIN_STATE_DIR` when herdr sets it (an
 action, or the picker pane), otherwise `$XDG_STATE_HOME/herdr/plugins/herdr-estate`
-or `~/.local/state/herdr/plugins/herdr-estate` — the same directory
-herdr itself would set that variable to, so a shell invocation and a
+or `~/.local/state/herdr/plugins/herdr-estate`. That is the directory
+herdr itself would set the variable to, so a shell invocation and a
 herdr-launched one land in the same place. It also holds the ownership
-record (`owned.json`), each campaign's assembled prompt
-(`<estate>-<campaign>.prompt.md`) and the worktrees the verbs create
-(under `worktrees/`). The log is created readable by you only, and a failed herdr call's
+record (`owned.json`) and its lock (`owned.lock`), each campaign's
+assembled prompt (`<estate>-<campaign>.prompt.md`), the worktrees the
+verbs create (under `worktrees/`), and one lock file per campaign
+(under `locks/`), held while a launch runs and left in place after.
+The log is created readable by you only, and a failed herdr call's
 message masks every estate `env` value the way a `--dry-run` plan
 does, on stderr and in the log alike. The log only grows; delete it
 whenever.

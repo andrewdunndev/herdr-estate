@@ -1,36 +1,3 @@
-//! Two independent double-open guards, plus the live-workspace lookup
-//! `ownership` and the alive check build on.
-//!
-//! `registry_holder`/`transcript_exists` read Claude Code's own
-//! app-local state (`~/.claude/sessions`, `~/.claude/projects`) — no
-//! herdr, no shell but the one process-liveness probe below. They
-//! answer: is *this conversation* already open in some other live pane,
-//! and does it even have a transcript yet. Both are claude-specific;
-//! `verbs` only calls them for a campaign whose agent kind is `claude`.
-//!
-//! `live_workspace` answers a different question over the herdr CLI:
-//! does a live workspace already carry *this address*. `workspace list`
-//! returns `{"result": {"workspaces": [{"workspace_id", "label",
-//! "agent_status", ...}]}}`; a non-zero exit (`call_herdr`'s default
-//! `check: true`) or a 0 exit whose JSON didn't shape into a
-//! `workspaces` array both return `EstateError::Protocol` — an error
-//! that stops the verb, never a silent "no workspace, carry on". Every
-//! call also prunes `ownership`'s record to the workspace ids this
-//! listing still reports, since this is the one place the full listing
-//! is already in hand. Every row carrying the address is collected, not
-//! just the first: herdr's ids are reused across a server restart, so a
-//! second workspace under the same label is a real possibility, and
-//! picking one row over the other would hide it from both the alive
-//! guard and the ownership guard. More than one match returns
-//! `EstateError::Guard` naming every id found, before either guard runs
-//! on any of them.
-//!
-//! `workspace_alive` reads `agent_status` off the row `live_workspace`
-//! already fetched — no separate `agent list` call. "working", "idle"
-//! and "done" mean an agent is attached to the workspace; "unknown"
-//! means a bare shell with none. It fails closed: a missing key, a
-//! null, or any value other than exactly "unknown" counts as alive.
-
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -39,12 +6,7 @@ use crate::herdrcli::{self, AgentStatus, Workspace};
 use crate::ownership;
 use crate::paths::home_dir;
 
-/// Whether `pid` names a live process this user can signal — `kill -0`,
-/// via the `kill` binary rather than a `libc`-crate `kill(2)` wrapper
-/// (the same dependency-free tradeoff `continuity::hostname` makes for
-/// `gethostname(2)`). A "not found" and a "found but owned by someone
-/// else" exit the same way here: either is "not a holder".
-fn pid_alive(pid: u32) -> bool {
+pub(crate) fn pid_alive(pid: u32) -> bool {
     std::process::Command::new("kill")
         .args(["-0", &pid.to_string()])
         .output()
@@ -52,8 +14,6 @@ fn pid_alive(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
-/// Where `conversation_id` is currently open, if anywhere. A registry
-/// entry whose pid is dead is crash residue, not a live holder.
 pub fn registry_holder(conversation_id: &str) -> Option<String> {
     let sessions_dir = home_dir().join(".claude").join("sessions");
     let entries = std::fs::read_dir(&sessions_dir).ok()?;
@@ -94,12 +54,6 @@ pub fn registry_holder(conversation_id: &str) -> Option<String> {
     None
 }
 
-/// Every live pane in `~/.claude/sessions` that currently holds
-/// `conversation_id`, not just the first -- the stop path's own
-/// question, since the conversation it retires is by definition open in
-/// the very pane calling this, and what matters there is whether a
-/// SECOND live pane holds it too. Otherwise the same read and the same
-/// dead-pid exclusion as `registry_holder`.
 pub fn live_registry_holders(conversation_id: &str) -> Vec<String> {
     let sessions_dir = home_dir().join(".claude").join("sessions");
     let entries = match std::fs::read_dir(&sessions_dir) {
@@ -144,7 +98,6 @@ pub fn live_registry_holders(conversation_id: &str) -> Vec<String> {
     holders
 }
 
-/// A conversation persists only once it has at least one turn.
 pub fn transcript_exists(conversation_id: &str) -> bool {
     let projects_dir: &Path = &home_dir().join(".claude").join("projects");
     let file_name = format!("{conversation_id}.jsonl");
@@ -156,15 +109,12 @@ pub fn transcript_exists(conversation_id: &str) -> bool {
     }
 }
 
-/// The workspace herdr already has open under `address`, if any. Errs
-/// when more than one row carries it: nothing here is safe to pick over
-/// the other, so this stops the verb rather than silently acting on
-/// whichever row happened to come first.
 pub fn live_workspace(address: &str) -> Result<Option<Workspace>, EstateError> {
+    let recorded_before_listing = ownership::ids();
     let workspaces = herdrcli::workspace_list()?;
     let existing_ids: BTreeSet<String> =
         workspaces.iter().map(|w| w.workspace_id.clone()).collect();
-    ownership::prune(&existing_ids)
+    ownership::prune(&existing_ids, &recorded_before_listing)
         .map_err(|e| EstateError::Config(format!("could not update the ownership record: {e}")))?;
     let mut matching: Vec<Workspace> = workspaces
         .into_iter()
@@ -182,8 +132,6 @@ pub fn live_workspace(address: &str) -> Result<Option<Workspace>, EstateError> {
     Ok(matching.pop())
 }
 
-/// Fail closed: anything other than exactly "unknown" counts as alive,
-/// including a missing key, a null, or an unrecognised value.
 pub fn workspace_alive(ws: &Workspace) -> bool {
     match &ws.agent_status {
         None => true,
@@ -231,7 +179,6 @@ mod tests {
     fn dead_pid_is_not_a_holder() {
         let home = TempDir::new();
         let sessions = home.path().join(".claude").join("sessions");
-        // A pid this unlikely to be a live process on the test machine.
         write_session(&sessions, 999_999, "sid-1", "garden");
         let _g = EnvGuard::set(&[("HOME", home.path().to_str().unwrap())]);
         assert!(registry_holder("sid-1").is_none());
@@ -274,12 +221,6 @@ mod tests {
         assert!(!transcript_exists("sid-1"));
     }
 
-    /// A single combined guard for both env vars these tests need. Two
-    /// live `EnvGuard`s on one thread would each try to lock the same
-    /// non-reentrant mutex (see `EnvGuard`'s own doc comment) and
-    /// deadlock the whole suite, so every test below sets
-    /// `HERDR_PLUGIN_STATE_DIR` and `HERDR_BIN_PATH` in one call instead
-    /// of two.
     fn isolated_state(bin_path: &str) -> (TempDir, EnvGuard) {
         let d = TempDir::new();
         let g = EnvGuard::set(&[
@@ -324,9 +265,6 @@ mod tests {
 
     #[test]
     fn missing_workspaces_array_raises() {
-        // A 0 exit whose stdout didn't parse into an object leaves
-        // HerdrResult.data == {} — that must stop the verb, not read
-        // as zero workspaces.
         let fake = FakeHerdr::new();
         fake.set_response(0, "not json", 0);
         let (_state, _g) = isolated_state(fake.bin_path().to_str().unwrap());
@@ -465,11 +403,6 @@ mod tests {
 
     #[test]
     fn unrecognised_wire_value_deserializes_as_alive() {
-        // Drives the guard from JSON, not a hand-built enum: this is the
-        // only test that exercises AgentStatus's custom Deserialize on a
-        // string it has never seen, the code that decides whether an
-        // unrecognised herdr status becomes Other (alive) or Unknown
-        // (closeable).
         let ws: Workspace = serde_json::from_value(serde_json::json!({
             "workspace_id": "w1", "label": "home/garden", "agent_status": "busy"
         }))
@@ -479,9 +412,6 @@ mod tests {
 
     #[test]
     fn json_null_agent_status_deserializes_as_alive() {
-        // Distinct from a missing key: herdr sent the key with an
-        // explicit `null` value, which `Option`'s own Deserialize
-        // collapses to the same `None` a missing key produces.
         let ws: Workspace = serde_json::from_value(serde_json::json!({
             "workspace_id": "w1", "label": "home/garden", "agent_status": null
         }))

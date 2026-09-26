@@ -3,7 +3,7 @@
 # dunn.dev/herdr-estate
 
 [![pipeline](https://gitlab.com/dunn.dev/herdr-estate/badges/main/pipeline.svg)](https://gitlab.com/dunn.dev/herdr-estate/-/pipelines)
-[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![license](https://img.shields.io/badge/license-MIT_AND_Apache--2.0-green)](#license)
 ![built with GitLab](https://img.shields.io/badge/built_with-GitLab-FC6D26?logo=gitlab)
 
 herdr-estate is a plugin for the [herdr](https://herdr.dev) terminal
@@ -24,8 +24,10 @@ conversation that isn't finished.
 
 ## Install
 
-Requirements: herdr 0.9.1+, macOS or Linux, Rust 1.88+; herdr builds
-the plugin on install.
+Requirements: herdr 0.9.1+, macOS or Linux, Rust 1.89+; herdr builds
+the plugin on install. The hand-off to herdr (see Develop) pings
+herdr's API first and refuses, naming both versions, a protocol older
+than 22, herdr 0.9.1's.
 
 ```sh
 herdr plugin install andrewdunndev/herdr-estate
@@ -52,8 +54,11 @@ or a [release binary](https://gitlab.com/dunn.dev/herdr-estate/-/releases) puts 
 
 ![An address names one estate table and one campaign directory, whose campaign.md sets the agent, its flags and extra paths.](diagrams/two-files.svg)
 
-The estate table lives at `~/.config/herdr-estate/estates.toml`; only
-`root` is required:
+The estate table is `estates.toml` in the config dir herdr gives the
+plugin, `~/.config/herdr/plugins/config/herdr-estate/` by default
+(`herdr plugin config-dir herdr-estate` prints it); a shell run reads
+the same file. When it isn't there, `~/.config/herdr-estate/estates.toml`
+is read instead. Only `root` is required:
 
 ```toml
 [estate.home]
@@ -62,15 +67,17 @@ root = "~/estates/home"
 
 Each campaign is a directory under `campaigns/` holding a
 `campaign.md`, whose YAML frontmatter overrides the agent kind and its
-flags, and adds `paths`. A `paths` entry that doesn't exist is skipped,
-with a warning, rather than passed on. The agent works from the estate
+flags, and adds `paths`. A `paths` entry that doesn't exist is skipped
+rather than passed on, with a warning once the launch passes its
+guards. The agent works from the estate
 root, with the address in `HERDR_ESTATE_ADDRESS`.
 [examples/](examples/) is an annotated estate.
 
 An estate's optional `prepare` runs an argv command, no shell, in the
 campaign's workdir before the workspace is closed or created; a
-non-zero exit refuses the launch and leaves a running workspace
-untouched.
+non-zero exit, or a run past 60 seconds, refuses the launch and leaves
+a running workspace untouched. The agent then has 30 seconds to be
+ready, and a picker row handed to herdr (below) is waited on for 120.
 
 ## Worktrees
 
@@ -80,9 +87,10 @@ worktree:
   branch: wt/site-work
 ```
 
-`resume` and `fresh` create it if missing (a new branch starts from
-the remote default; an existing one is checked out as is), run the
-agent in it and add it to its paths. List the estate root in `paths`
+Once their guards pass, `resume` and `fresh` create it if missing (a
+new branch starts from the remote default; an existing one is checked
+out as is), then run `prepare` and the agent in it and add it to its
+paths. List the estate root in `paths`
 so the agent can still reach `log.md`.
 
 ## The verbs
@@ -97,8 +105,11 @@ so the agent can still reach `log.md`.
 - `create <address> --brief <text>`: write a new campaign's
   `campaign.md` and `log.md`, uncommitted.
 
-With no address, the current workspace's label is used. `--dry-run`
-prints the plan and changes nothing; it needs an address. Progress and
+With no address, the current workspace's label is used. Run in the
+campaign's own workspace after its agent exits, `resume` and `fresh`
+hand the run to herdr, since closing that workspace would end them. `--dry-run`
+prints the plan and changes nothing; it needs an address. `--help`
+lists the verbs and their flags. Progress and
 the run log: [docs/events.md](docs/events.md).
 
 ## Picker
@@ -136,7 +147,17 @@ cargo fmt --check && cargo clippy --release --all-targets --all-features -- -D w
 
 `plugin link` skips `[[build]]`; a rebuild takes effect on herdr's
 next call. Tests drive a fake herdr through `$HERDR_BIN_PATH`.
-`pick --render-once` prints one frame.
+`pick --render-once` prints one frame, 80x20 unless `--width` and
+`--height` say otherwise. When a row's workspace is the
+popup's own, the popup hands it to a `dispatch-*` action, which runs
+`pick --dispatch`, over the API socket herdr names in
+`HERDR_SOCKET_PATH`.
+
+## License
+
+MIT, in [LICENSE](LICENSE), except `src/picker/theme.rs`, which adapts
+herdr's palettes and theme resolution under Apache-2.0, in
+[LICENSE-APACHE-HERDR](LICENSE-APACHE-HERDR).
 
 ---
 

@@ -1,16 +1,15 @@
-//! herdr-estate: durable campaigns for herdr. See `docs/vocabulary.md` for
-//! the six words this crate uses in their one defined sense.
-
 mod adapters;
 mod campaign;
 pub mod cli;
 mod config;
 mod continuity;
+mod detach;
 mod dispatch;
 mod doubleopen;
 mod errors;
 mod frontmatter;
 mod herdrcli;
+mod lock;
 mod name;
 mod ownership;
 mod paths;
@@ -21,12 +20,6 @@ mod verb;
 mod verbs;
 mod worktree;
 
-/// Test-only support for the tests scattered across this crate's modules
-/// that read or write process environment variables. `std::env` is
-/// process-global, and `cargo test` runs tests on multiple threads by
-/// default, so every test that touches it goes through one `EnvGuard`
-/// that serializes on a shared lock and restores whatever it changed when
-/// it drops.
 #[cfg(test)]
 pub(crate) mod test_support {
     use std::sync::{Mutex, MutexGuard};
@@ -39,12 +32,6 @@ pub(crate) mod test_support {
     }
 
     impl EnvGuard {
-        /// Apply every `(key, value)` in `sets`, then remove every key in
-        /// `unsets`, holding the shared lock until the guard drops, at
-        /// which point every touched key's original value (or absence)
-        /// is restored. A test that needs both together makes ONE
-        /// `EnvGuard::new` call — never two guards live at once, which
-        /// would deadlock on this non-reentrant lock.
         pub fn new(sets: &[(&str, &str)], unsets: &[&str]) -> Self {
             let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let mut saved = Vec::new();
@@ -79,9 +66,6 @@ pub(crate) mod test_support {
         }
     }
 
-    /// A fresh, empty directory under the OS temp dir, removed when the
-    /// guard drops. Stands in for the `tempfile` crate, which is outside
-    /// this crate's dependency budget.
     pub struct TempDir {
         path: std::path::PathBuf,
     }
@@ -120,13 +104,6 @@ pub(crate) mod test_support {
         }
     }
 
-    /// A fake `herdr` executable for tests that cross the herdr CLI
-    /// boundary. Point `HERDR_BIN_PATH` at `bin_path()`; every call the
-    /// code under test makes records its exact argv and environment to
-    /// this directory, in call order, and replays whatever canned
-    /// response `set_response` queued for that call index — so a test
-    /// asserts the real thing (what herdr was actually asked to do)
-    /// rather than that a mock was called.
     pub struct FakeHerdr {
         dir: TempDir,
     }
@@ -168,9 +145,6 @@ pub(crate) mod test_support {
             self.dir.path().join("calls")
         }
 
-        /// Queue the canned stdout and exit code for the call at
-        /// `index` (0-based, in the order the code under test makes
-        /// them), before that code runs.
         pub fn set_response(&self, index: usize, stdout: &str, exit_code: i32) {
             std::fs::write(self.calls_dir().join(format!("{index}.stdout")), stdout)
                 .expect("write fake herdr canned stdout");

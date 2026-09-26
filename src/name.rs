@@ -1,11 +1,5 @@
-//! What `create` accepts, and the agent name an address runs under. Pure:
-//! no I/O, so the picker's core, the verb and the CLI share one set of
-//! rules and one set of reasons, word for word.
-
-/// The longest brief `create` takes, in characters.
 pub const BRIEF_MAX: usize = 120;
 
-/// The longest agent name herdr is given; `agent_name` cuts there.
 const AGENT_NAME_MAX: usize = 32;
 
 fn is_agent_name_byte(c: char) -> bool {
@@ -32,11 +26,6 @@ pub fn agent_name(address: &str) -> String {
     named.chars().take(AGENT_NAME_MAX).collect()
 }
 
-/// Why `estate/name` can't be created, or `None` when it can. The name
-/// is kebab-case (`[a-z0-9]+(-[a-z0-9]+)*`), never `archive` (the
-/// estates' archive directory), short enough that its agent name is
-/// never cut, and neither an address in `known` nor one whose agent
-/// name it would share.
 pub fn refusal(estate: &str, name: &str, known: &[&str]) -> Option<String> {
     let kebab = name.split('-').all(|part| {
         !part.is_empty()
@@ -65,8 +54,6 @@ pub fn refusal(estate: &str, name: &str, known: &[&str]) -> Option<String> {
     })
 }
 
-/// Why `brief` can't be a campaign's brief, or `None` when it can: it
-/// needs text, at most `BRIEF_MAX` characters, on one line.
 pub fn brief_refusal(brief: &str) -> Option<&'static str> {
     if brief.trim().is_empty() {
         Some("type a one-line brief first")
@@ -127,8 +114,6 @@ mod tests {
 
     #[test]
     fn each_clause_of_the_name_rule_refuses_with_one_reason() {
-        // Empty, a leading, trailing or double hyphen, and outside the
-        // class: uppercase, '_', '.', a space and a second '/'.
         for name in ["", "-a", "a-", "a--b", "Ab", "a_b", "a.b", "a b", "a/b"] {
             assert_eq!(
                 refusal("home", name, &[]).as_deref(),
@@ -144,8 +129,6 @@ mod tests {
 
     #[test]
     fn the_longest_name_leaves_the_agent_name_uncut() {
-        // "dunn-" leaves 27 of the agent name's 32 characters, and
-        // "nomograph-" 22.
         for (estate, max) in [("dunn", 27), ("nomograph", 22)] {
             assert_eq!(refusal(estate, &"x".repeat(max), &[]), None, "{estate}");
             assert_eq!(

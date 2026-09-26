@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+- The picker no longer stops halfway when the row it acts on is the
+  workspace it was opened from. Closing that workspace ended the popup
+  and the run inside it, after the close and before the create, so
+  Ctrl-f's second press stopped the agent and started nothing. The
+  popup now hands such a row to herdr as one of three new manifest
+  actions, `dispatch-open`, `dispatch-fresh` and `dispatch-stop`, which
+  herdr runs outside every workspace. The replacement is created,
+  started and focused as it is from any other workspace, and a refusal
+  still holds in the popup, as does herdr's own error for a run that
+  never started. The popup waits on the run for at most 120 seconds,
+  then names its plugin log entry. Before invoking, it checks herdr's
+  API protocol with `ping` and refuses one older than herdr 0.9.1's,
+  naming both; any other protocol error names them too.
+- `resume` or `fresh` typed in the campaign's own workspace once its
+  agent has exited no longer closes that workspace and stops, taking
+  the shell running it down with it. It hands the run to herdr through
+  the same `dispatch-*` actions, and the replacement is created,
+  started and focused.
+- Two launches of one address at once, from two popups or a popup and
+  a shell, no longer both create a workspace under its label. A launch
+  takes a lock for its campaign in the state dir, and the second one
+  refuses, naming the first one's pid, until the first finishes. A run
+  that dies, even by SIGKILL, releases its lock with it.
+- Launches of different addresses at once no longer drop each other's
+  records from `owned.json`. Every change to it holds `owned.lock`
+  beside it, and a launch prunes only records that existed before its
+  workspace listing was read.
+- `--help` and `-h` print the verbs and their flags, and write
+  nothing to `events.log`.
+- A shell run now finds the estate table where the picker does, in
+  herdr's config dir for the plugin
+  (`~/.config/herdr/plugins/config/herdr-estate/estates.toml` by
+  default). `~/.config/herdr-estate/estates.toml` is still read when
+  that file isn't there, so an existing table needs no move.
+- A refused `resume` or `fresh` no longer creates the campaign's
+  worktree first. The worktree is created once every guard has passed,
+  just before `prepare` runs in it.
+- A `paths` entry that doesn't exist is reported once the launch has
+  passed its guards and `prepare`, not while the campaign resolves.
+  `--dry-run` and a refused launch no longer write that warning to
+  `events.log`; a dry run lists the path in its plan.
+- An estate's `prepare` that runs past 60 seconds is killed, with
+  every process it started, and the launch refused, where a hung one
+  used to hang `resume`, `fresh` and the picker with it. `prepare` now
+  runs in its own process group, so a Ctrl-C in the terminal running
+  the verb no longer reaches it.
+- The package license reads `MIT AND Apache-2.0`: the picker's theme
+  code adapts herdr's under Apache-2.0, as the README's new License
+  section says.
+
 ## v0.2.1 - 2026-09-25
 
 - A bare shell invocation now resolves the state dir to the same
