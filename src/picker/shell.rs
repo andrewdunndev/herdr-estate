@@ -142,17 +142,27 @@ pub fn run(
     // process exits, and an error returned straight to `cli::run` would
     // print into a pane that is already gone.
     let popup_workspace = detach::popup_workspace_id();
-    let hand_off = HandOff {
-        popup_workspace: popup_workspace.as_deref(),
-        run: detach::hand_off,
+    let handed = detach::self_hosted(&outcome, popup_workspace.as_deref())
+        .map(|(action, address)| (action, address.to_string()));
+    let dispatched = match (popup_workspace.as_deref(), handed) {
+        // Closing this row's workspace would end this process partway,
+        // so herdr runs the dispatch instead (`detach`).
+        (Some(workspace), Some((action, address))) => {
+            if let Some(p) = panel.0.as_ref() {
+                let _ = paint_panel(&mut std::io::stdout(), p);
+            }
+            detach::hand_off(action, &address, workspace).map(|succeeded| {
+                if succeeded {
+                    Dispatched::Done
+                } else {
+                    Dispatched::FailedAndSaid
+                }
+            })
+        }
+        _ => dispatch_outcome(estates, outcome, panel.0.as_ref(), &mut std::io::stdout())
+            .map(|()| Dispatched::Done),
     };
-    match dispatch_outcome(
-        estates,
-        outcome,
-        panel.0.as_ref(),
-        &hand_off,
-        &mut std::io::stdout(),
-    ) {
+    match dispatched {
         Ok(Dispatched::Done) => Ok(0),
         Ok(Dispatched::FailedAndSaid) => Ok(hold(&mut CrosstermEvents, &CROSSTERM_RAW_MODE)),
         Err(e) => Ok(report_and_hold(
@@ -164,7 +174,6 @@ pub fn run(
 }
 
 /// How a dispatch that returned ended, for `run`.
-#[derive(Debug, PartialEq, Eq)]
 enum Dispatched {
     Done,
     /// The run `detach::hand_off` handed to herdr failed; it logged why,
@@ -172,40 +181,20 @@ enum Dispatched {
     FailedAndSaid,
 }
 
-/// The workspace the popup was opened over, and what a row on it is
-/// handed to: `detach::hand_off` in production; a test substitutes a
-/// recorder, the same seam `RawMode` is.
-struct HandOff<'a> {
-    popup_workspace: Option<&'a str>,
-    run: fn(detach::RowAction, &str, &str) -> Result<bool, EstateError>,
-}
-
 /// Dispatch what the picker chose on the restored terminal, so its
 /// progress lines show in the popup while `agent start` waits. ratatui's
 /// restore went back to the main screen, where those lines show, so
 /// inside herdr (`panel`) it is painted onto `out` again first. A cancel
-/// exits next, so its paint never shows. A row whose live workspace is
-/// the popup's own goes to `hand_off.run` instead: closing that
-/// workspace would end this process partway (`detach`).
+/// exits next, so its paint never shows. `run` has already handed a row
+/// on the popup's own workspace to herdr, so this never closes that one.
 fn dispatch_outcome(
     estates: &toml::Table,
     outcome: Outcome,
     panel: Option<&Palette>,
-    hand_off: &HandOff,
     out: &mut impl Write,
-) -> Result<Dispatched, EstateError> {
+) -> Result<(), EstateError> {
     if let Some(p) = panel {
         let _ = paint_panel(out, p);
-    }
-    if let (Some(workspace), Some((action, address))) = (
-        hand_off.popup_workspace,
-        detach::self_hosted(&outcome, hand_off.popup_workspace),
-    ) {
-        return Ok(if (hand_off.run)(action, address, workspace)? {
-            Dispatched::Done
-        } else {
-            Dispatched::FailedAndSaid
-        });
     }
     match outcome {
         Outcome::Cancelled => Ok(()),
@@ -214,7 +203,6 @@ fn dispatch_outcome(
         Outcome::FreshRunning(row) => dispatch::fresh_row_running(estates, &row.address),
         Outcome::Create { address, brief } => dispatch::create_and_open(estates, &address, &brief),
     }
-    .map(|()| Dispatched::Done)
 }
 
 /// Paint a whole screen herdr's panel: `panel_bg` behind `text`, every
@@ -946,157 +934,10 @@ mod event_loop_tests {
                 brief: String::new(),
             };
             let mut out = Vec::new();
-            dispatch_outcome(
-                &toml::Table::new(),
-                Outcome::Selected(row),
-                panel,
-                &in_process(),
-                &mut out,
-            )
-            .unwrap();
+            dispatch_outcome(&toml::Table::new(), Outcome::Selected(row), panel, &mut out).unwrap();
             assert_eq!(String::from_utf8(out).unwrap(), want, "{panel:?}");
             assert_eq!(fake.argv(1), vec!["workspace", "focus", "w9"]);
         }
-    }
-
-    fn must_not_hand_off(
-        action: detach::RowAction,
-        address: &str,
-        _workspace: &str,
-    ) -> Result<bool, EstateError> {
-        panic!("handed off {action:?} {address}, a row that dispatches in this process");
-    }
-
-    /// A shell run's hand-off: no popup workspace, so every row
-    /// dispatches in this process.
-    fn in_process() -> HandOff<'static> {
-        HandOff {
-            popup_workspace: None,
-            run: must_not_hand_off,
-        }
-    }
-
-    thread_local! {
-        static HANDED_OFF: std::cell::RefCell<Vec<(detach::RowAction, String, String)>> =
-            const { std::cell::RefCell::new(Vec::new()) };
-    }
-
-    fn record_hand_off(
-        action: detach::RowAction,
-        address: &str,
-        workspace: &str,
-    ) -> Result<bool, EstateError> {
-        HANDED_OFF.with(|h| {
-            h.borrow_mut()
-                .push((action, address.to_string(), workspace.to_string()))
-        });
-        Ok(true)
-    }
-
-    fn record_failed_hand_off(
-        action: detach::RowAction,
-        address: &str,
-        workspace: &str,
-    ) -> Result<bool, EstateError> {
-        record_hand_off(action, address, workspace)?;
-        Ok(false)
-    }
-
-    fn idle_row_in(workspace_id: &str) -> Row {
-        Row {
-            address: "home/garden".to_string(),
-            state: RowState::Live {
-                workspace_id: workspace_id.to_string(),
-                agent_status: "idle".to_string(),
-            },
-            brief: String::new(),
-        }
-    }
-
-    #[test]
-    fn a_row_on_the_popups_own_workspace_is_handed_off_and_never_closed_from_here() {
-        // The bug this guards: closing the popup's own workspace ends
-        // the popup, so this process must make no herdr call of its own
-        // for that row, not even the re-read, and pass the whole
-        // dispatch to the hand-off with the row's action and address.
-        let d = crate::test_support::TempDir::new();
-        let fake = crate::test_support::FakeHerdr::new();
-        let _g = crate::test_support::EnvGuard::set(&[
-            ("HERDR_BIN_PATH", fake.bin_path().to_str().unwrap()),
-            ("HERDR_PLUGIN_STATE_DIR", d.path().to_str().unwrap()),
-        ]);
-        HANDED_OFF.with(|h| h.borrow_mut().clear());
-        let hand_off = HandOff {
-            popup_workspace: Some("w2"),
-            run: record_hand_off,
-        };
-        let done = dispatch_outcome(
-            &toml::Table::new(),
-            Outcome::FreshRunning(idle_row_in("w2")),
-            None,
-            &hand_off,
-            &mut Vec::new(),
-        )
-        .unwrap();
-        assert_eq!(done, Dispatched::Done);
-        assert_eq!(fake.call_count(), 0);
-        let handed = HANDED_OFF.with(|h| h.borrow().clone());
-        assert_eq!(
-            handed,
-            vec![(
-                detach::RowAction::Stop,
-                "home/garden".to_string(),
-                "w2".to_string()
-            )]
-        );
-    }
-
-    #[test]
-    fn a_failed_hand_off_is_held_without_reporting_it_a_second_time() {
-        let d = crate::test_support::TempDir::new();
-        let _g = crate::test_support::EnvGuard::set(&[(
-            "HERDR_PLUGIN_STATE_DIR",
-            d.path().to_str().unwrap(),
-        )]);
-        let hand_off = HandOff {
-            popup_workspace: Some("w2"),
-            run: record_failed_hand_off,
-        };
-        let failed = dispatch_outcome(
-            &toml::Table::new(),
-            Outcome::Selected(idle_row_in("w2")),
-            None,
-            &hand_off,
-            &mut Vec::new(),
-        )
-        .unwrap();
-        assert_eq!(failed, Dispatched::FailedAndSaid);
-        assert!(progress::logged_messages().is_empty());
-    }
-
-    #[test]
-    fn a_row_in_another_workspace_dispatches_here_even_inside_a_popup() {
-        // Same shape as `fresh_running_dispatches_to_stop_and_fresh_not_open_row`
-        // below: with no estate configured the in-process stop path
-        // fails resolving the campaign, which a hand-off never would.
-        let d = crate::test_support::TempDir::new();
-        let _g = crate::test_support::EnvGuard::set(&[(
-            "HERDR_PLUGIN_STATE_DIR",
-            d.path().to_str().unwrap(),
-        )]);
-        let hand_off = HandOff {
-            popup_workspace: Some("w2"),
-            run: must_not_hand_off,
-        };
-        let err = dispatch_outcome(
-            &toml::Table::new(),
-            Outcome::FreshRunning(idle_row_in("w9")),
-            None,
-            &hand_off,
-            &mut Vec::new(),
-        )
-        .unwrap_err();
-        assert!(matches!(err, EstateError::Config(msg) if msg.contains("no estate")));
     }
 
     #[test]
@@ -1127,7 +968,6 @@ mod event_loop_tests {
             &toml::Table::new(),
             Outcome::FreshRunning(row),
             None,
-            &in_process(),
             &mut Vec::new(),
         )
         .unwrap_err();
@@ -1204,14 +1044,7 @@ mod event_loop_tests {
             },
             brief: String::new(),
         };
-        dispatch_outcome(
-            &estates,
-            Outcome::FreshRunning(row),
-            None,
-            &in_process(),
-            &mut Vec::new(),
-        )
-        .unwrap();
+        dispatch_outcome(&estates, Outcome::FreshRunning(row), None, &mut Vec::new()).unwrap();
         assert_eq!(fake.argv(2), vec!["workspace", "close", "w1"]);
         assert_eq!(fake.argv(5), vec!["workspace", "focus", "w-new"]);
     }
