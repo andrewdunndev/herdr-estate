@@ -24,7 +24,7 @@ conversation that isn't finished.
 
 ## Install
 
-Requirements: herdr 0.9.1+, macOS or Linux, Rust 1.88+; herdr builds
+Requirements: herdr 0.9.1+, macOS or Linux, Rust 1.89+; herdr builds
 the plugin on install. The hand-off to herdr (see Develop) pings
 herdr's API first and refuses, naming both versions, a protocol older
 than 22, herdr 0.9.1's.

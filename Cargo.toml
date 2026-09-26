@@ -5,7 +5,7 @@ edition = "2021"
 description = "Long-running campaigns for herdr: threads of agent work, addressed as estate/campaign, that outlive every conversation."
 license = "MIT AND Apache-2.0"
 repository = "https://gitlab.com/dunn.dev/herdr-estate"
-rust-version = "1.88"
+rust-version = "1.89"
 publish = false
 
 [dependencies]
