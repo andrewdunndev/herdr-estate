@@ -196,6 +196,15 @@ pub fn hand_off(action: RowAction, address: &str, workspace_id: &str) -> Result<
     progress::step(&format!(
         "{address}: this process is in the workspace it may close, handing off to herdr action {action_id}"
     ));
+    let herdr = check_protocol()?;
+    let pinned = |e: EstateError| {
+        match e {
+        EstateError::Protocol(m) => EstateError::Protocol(format!(
+            "{m} ({herdr}; this plugin is built against herdr {TESTED_HERDR}, protocol {MIN_PROTOCOL})"
+        )),
+        other => other,
+    }
+    };
     let invoked = herdrcli::call_api(
         "plugin.action.invoke",
         serde_json::json!({
@@ -203,14 +212,40 @@ pub fn hand_off(action: RowAction, address: &str, workspace_id: &str) -> Result<
             "action_id": action_id,
             "context": {"workspace_id": workspace_id, "workspace_label": address},
         }),
-    )?;
+    )
+    .map_err(pinned)?;
     let log_id = invoked
         .pointer("/log/log_id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| {
-            EstateError::Protocol(format!("{action_id}: herdr's reply named no log entry"))
+            pinned(EstateError::Protocol(format!(
+                "{action_id}: herdr's reply named no log entry"
+            )))
         })?;
-    wait_for_run(&plugin_id, log_id, &production_wait())
+    wait_for_run(&plugin_id, log_id, &production_wait()).map_err(pinned)
+}
+
+/// The herdr this plugin's hand-off is built and tested against, and
+/// the API protocol it speaks (`ping`'s `protocol`).
+const TESTED_HERDR: &str = "0.9.1";
+const MIN_PROTOCOL: u64 = 22;
+
+/// herdr's `ping` over the API socket, before anything is invoked: an
+/// older protocol than `MIN_PROTOCOL`, or a reply with none, refuses
+/// with the expected and actual versions. Returns "herdr <version>,
+/// protocol <n>" for later errors to name.
+fn check_protocol() -> Result<String, EstateError> {
+    let pong = herdrcli::call_api("ping", serde_json::json!({}))?;
+    let version = pong["version"].as_str().unwrap_or("of unknown version");
+    match pong["protocol"].as_u64() {
+        Some(protocol) if protocol >= MIN_PROTOCOL => Ok(format!("herdr {version}, protocol {protocol}")),
+        Some(protocol) => Err(EstateError::Protocol(format!(
+            "herdr {version} speaks API protocol {protocol}; the picker's hand-off needs protocol {MIN_PROTOCOL} or later (herdr {TESTED_HERDR}+). Upgrade herdr"
+        ))),
+        None => Err(EstateError::Protocol(format!(
+            "herdr's ping reply named no API protocol; the picker's hand-off needs protocol {MIN_PROTOCOL} (herdr {TESTED_HERDR}+)"
+        ))),
+    }
 }
 
 /// Poll `plugin log list` until `log_id` is no longer running. A failed
@@ -446,12 +481,13 @@ mod tests {
         }
     }
 
-    /// A one-shot stand-in for herdr's API socket: accepts one
-    /// connection, answers `reply`, and hands back the request line.
-    fn fake_api(reply: &'static str) -> (std::path::PathBuf, std::thread::JoinHandle<String>) {
+    /// A stand-in for herdr's API socket: answers one connection per
+    /// entry of `replies`, in order, and hands back each request line.
+    fn fake_api_seq(
+        replies: Vec<String>,
+    ) -> (std::path::PathBuf, std::thread::JoinHandle<Vec<String>>) {
         use std::sync::atomic::{AtomicU64, Ordering};
         static N: AtomicU64 = AtomicU64::new(0);
-        // Short: a socket path must fit sockaddr_un's 104 bytes on macOS.
         let path = std::env::temp_dir().join(format!(
             "he-api-{}-{}.sock",
             std::process::id(),
@@ -460,13 +496,33 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
         let served = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut line = String::new();
-            BufReader::new(&stream).read_line(&mut line).unwrap();
-            writeln!(&stream, "{reply}").unwrap();
-            line
+            replies
+                .iter()
+                .map(|reply| {
+                    let (stream, _) = listener.accept().unwrap();
+                    let mut line = String::new();
+                    BufReader::new(&stream).read_line(&mut line).unwrap();
+                    writeln!(&stream, "{reply}").unwrap();
+                    line
+                })
+                .collect()
         });
         (path, served)
+    }
+
+    const PONG: &str = r#"{"id":"x","result":{"type":"pong","version":"0.9.1","protocol":22}}"#;
+
+    /// herdr 0.9.1's `ping`, then `reply` to the invoke; hands back the
+    /// invoke's request line.
+    fn fake_api(reply: &'static str) -> (std::path::PathBuf, std::thread::JoinHandle<String>) {
+        let (path, served) = fake_api_seq(vec![PONG.to_string(), reply.to_string()]);
+        let invoke = std::thread::spawn(move || {
+            let lines = served.join().unwrap();
+            let ping: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
+            assert_eq!(ping["method"], "ping");
+            lines[1].clone()
+        });
+        (path, invoke)
     }
 
     const INVOKED: &str = r#"{"id":"x","result":{"type":"plugin_action_invoked","log":{"log_id":"plugin-log-7","status":"running"}}}"#;
@@ -665,6 +721,64 @@ mod tests {
             "{err}"
         );
         assert_eq!(fake.call_count(), 0);
+    }
+
+    fn hand_off_against(replies: &[&str]) -> (EstateError, Vec<String>, usize) {
+        let d = TempDir::new();
+        let fake = FakeHerdr::new();
+        let (socket, served) = fake_api_seq(replies.iter().map(|r| r.to_string()).collect());
+        let _g = EnvGuard::new(
+            &[
+                ("HERDR_SOCKET_PATH", socket.to_str().unwrap()),
+                ("HERDR_BIN_PATH", fake.bin_path().to_str().unwrap()),
+                ("HERDR_PLUGIN_STATE_DIR", d.path().to_str().unwrap()),
+            ],
+            &["HERDR_PLUGIN_ID"],
+        );
+        let err = hand_off(RowAction::Stop, "home/garden", "w2").unwrap_err();
+        let lines = served.join().unwrap();
+        let _ = std::fs::remove_file(&socket);
+        (err, lines, fake.call_count())
+    }
+
+    #[test]
+    fn an_older_herdr_protocol_refuses_by_name_before_anything_is_invoked() {
+        let (err, lines, calls) = hand_off_against(&[
+            r#"{"id":"x","result":{"type":"pong","version":"0.8.0","protocol":19}}"#,
+        ]);
+        assert!(
+            matches!(&err, EstateError::Protocol(m) if m.contains("herdr 0.8.0 speaks API protocol 19") && m.contains("protocol 22 or later (herdr 0.9.1+)")),
+            "{err}"
+        );
+        assert_eq!(lines.len(), 1);
+        assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn a_ping_reply_with_no_protocol_refuses_naming_the_pin() {
+        let (err, _, calls) = hand_off_against(&[r#"{"id":"x","result":{"type":"ok"}}"#]);
+        assert!(
+            matches!(&err, EstateError::Protocol(m) if m.contains("no API protocol") && m.contains("herdr 0.9.1+")),
+            "{err}"
+        );
+        assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn an_unknown_method_or_malformed_reply_names_both_herdr_versions() {
+        let (err, _, _) = hand_off_against(&[
+            r#"{"id":"x","result":{"type":"pong","version":"0.10.0","protocol":23}}"#,
+            r#"{"id":"","error":{"code":"invalid_request","message":"invalid request: unknown variant `plugin.action.invoke`"}}"#,
+        ]);
+        assert!(
+            matches!(&err, EstateError::Protocol(m) if m.contains("unknown variant") && m.contains("herdr 0.10.0, protocol 23") && m.contains("built against herdr 0.9.1, protocol 22")),
+            "{err}"
+        );
+        let (err, _, _) = hand_off_against(&[PONG, r#"{"id":"x","result":{"type":"ok"}}"#]);
+        assert!(
+            matches!(&err, EstateError::Protocol(m) if m.contains("named no log entry") && m.contains("herdr 0.9.1, protocol 22")),
+            "{err}"
+        );
     }
 
     fn shell_in(workspace: &str, state: &TempDir, fake: &FakeHerdr) -> EnvGuard {

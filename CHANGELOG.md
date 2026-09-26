@@ -12,7 +12,9 @@
   started and focused as it is from any other workspace, and a refusal
   still holds in the popup, as does herdr's own error for a run that
   never started. The popup waits on the run for at most 120 seconds,
-  then names its plugin log entry.
+  then names its plugin log entry. Before invoking, it checks herdr's
+  API protocol with `ping` and refuses one older than herdr 0.9.1's,
+  naming both; any other protocol error names them too.
 - `resume` or `fresh` typed in the campaign's own workspace once its
   agent has exited no longer closes that workspace and stops, taking
   the shell running it down with it. It hands the run to herdr through
