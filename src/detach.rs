@@ -271,6 +271,7 @@ fn relay_failure(entry: &serde_json::Value, log_id: &str, out: &mut impl std::io
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::herdrcli::AgentStatus;
     use crate::picker::core::Row;
     use crate::test_support::{EnvGuard, FakeHerdr, TempDir};
     use std::io::{BufRead, BufReader, Write};
@@ -280,7 +281,7 @@ mod tests {
             address: "home/garden".to_string(),
             state: RowState::Live {
                 workspace_id: workspace_id.to_string(),
-                agent_status: "idle".to_string(),
+                agent_status: Some(AgentStatus::Idle),
             },
             brief: String::new(),
         }

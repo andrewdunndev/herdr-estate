@@ -532,6 +532,7 @@ fn translate_key(key: KeyEvent) -> Option<CoreEvent> {
 #[cfg(test)]
 mod event_loop_tests {
     use super::*;
+    use crate::herdrcli::AgentStatus;
     use crate::picker::core::{Row, RowState};
     use ratatui::backend::TestBackend;
     use std::collections::VecDeque;
@@ -604,7 +605,7 @@ mod event_loop_tests {
             address: "home/garden".to_string(),
             state: RowState::Live {
                 workspace_id: "w1".to_string(),
-                agent_status: "idle".to_string(),
+                agent_status: Some(AgentStatus::Idle),
             },
             brief: String::new(),
         }]
@@ -876,7 +877,7 @@ mod event_loop_tests {
             address: "home/garden".to_string(),
             state: RowState::Live {
                 workspace_id: "w1".to_string(),
-                agent_status: "working".to_string(),
+                agent_status: Some(AgentStatus::Working),
             },
             brief: String::new(),
         }];
@@ -929,7 +930,7 @@ mod event_loop_tests {
                 address: "home/garden".to_string(),
                 state: RowState::Live {
                     workspace_id: "w9".to_string(),
-                    agent_status: "working".to_string(),
+                    agent_status: Some(AgentStatus::Working),
                 },
                 brief: String::new(),
             };
@@ -960,7 +961,7 @@ mod event_loop_tests {
             address: "home/garden".to_string(),
             state: RowState::Live {
                 workspace_id: "w1".to_string(),
-                agent_status: "idle".to_string(),
+                agent_status: Some(AgentStatus::Idle),
             },
             brief: String::new(),
         };
@@ -1040,7 +1041,7 @@ mod event_loop_tests {
             address: "home/garden".to_string(),
             state: RowState::Live {
                 workspace_id: "w1".to_string(),
-                agent_status: "idle".to_string(),
+                agent_status: Some(AgentStatus::Idle),
             },
             brief: String::new(),
         };

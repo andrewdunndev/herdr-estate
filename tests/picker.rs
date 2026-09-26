@@ -12,7 +12,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use herdr_estate::picker::core::{self, AppState, Indicators, Row, RowState};
+use herdr_estate::picker::core::{self, AgentStatus, AppState, Indicators, Row, RowState};
 
 mod common;
 use common::*;
@@ -61,7 +61,7 @@ fn render_once_matches_the_pure_core_for_the_same_rows() {
             address: "home/garden".to_string(),
             state: RowState::Live {
                 workspace_id: "w9".to_string(),
-                agent_status: "working".to_string(),
+                agent_status: Some(AgentStatus::Working),
             },
             brief: String::new(),
         },

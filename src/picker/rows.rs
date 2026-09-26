@@ -29,11 +29,7 @@ pub fn build_rows(estates: &toml::Table) -> Result<Vec<Row>, EstateError> {
                     // key is herdr sending nothing to trust either way,
                     // which `core::running` must treat as attached and
                     // fail closed, not wave through as a plain shell.
-                    agent_status: ws
-                        .agent_status
-                        .as_ref()
-                        .map(|s| s.as_str().to_string())
-                        .unwrap_or_else(|| "missing".to_string()),
+                    agent_status: ws.agent_status.clone(),
                 },
                 None if !campaign_row.last.is_empty() => RowState::Dormant {
                     last: campaign_row.last,
@@ -65,6 +61,7 @@ fn index_by_label(workspaces: Vec<Workspace>) -> HashMap<String, Workspace> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::herdrcli::AgentStatus;
     use crate::test_support::{EnvGuard, FakeHerdr, TempDir};
 
     struct Fixture {
@@ -162,7 +159,7 @@ mod tests {
             rows[0].state,
             RowState::Live {
                 workspace_id: "w9".to_string(),
-                agent_status: "working".to_string(),
+                agent_status: Some(AgentStatus::Working),
             }
         );
     }
@@ -189,7 +186,7 @@ mod tests {
         let RowState::Live { agent_status, .. } = &rows[0].state else {
             panic!("expected a Live row, got {:?}", rows[0].state);
         };
-        assert_ne!(agent_status, "unknown");
+        assert_eq!(agent_status, &None);
     }
 
     #[test]

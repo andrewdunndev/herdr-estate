@@ -8,6 +8,7 @@
 //! filter `estate/name` that names no campaign offers `+ create`, whose
 //! brief step is ours.
 
+pub use crate::herdrcli::AgentStatus;
 use std::collections::BTreeMap;
 
 use unicode_segmentation::UnicodeSegmentation;
@@ -18,10 +19,12 @@ use crate::name;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RowState {
     /// A workspace currently carries this address. `agent_status` is
-    /// already rendered to text (`herdrcli::AgentStatus::as_str`).
+    /// `None` when herdr's listing sent none for it: nothing to trust
+    /// either way, so `running` treats it as attached and fails closed,
+    /// unlike the real wire value `unknown` (a bare shell).
     Live {
         workspace_id: String,
-        agent_status: String,
+        agent_status: Option<AgentStatus>,
     },
     /// No live workspace, but `sessions.log` records a conversation.
     /// `last` is the date of its latest line, `YYYY-MM-DD`.
@@ -198,7 +201,8 @@ fn selection_at(filtered: &[&Row], i: usize) -> Selection {
 /// among these is where Ctrl-f's double press applies; anything else
 /// running refuses outright.
 fn running(row: &Row) -> bool {
-    matches!(&row.state, RowState::Live { agent_status, .. } if agent_status != "unknown")
+    matches!(&row.state, RowState::Live { agent_status, .. }
+        if agent_status.as_ref() != Some(&AgentStatus::Unknown))
 }
 
 /// Whether Ctrl-f's double press applies to `row` at all: a running row
@@ -207,7 +211,7 @@ fn running(row: &Row) -> bool {
 /// outright instead of arming.
 fn arm_eligible(row: &Row) -> bool {
     matches!(&row.state, RowState::Live { agent_status, .. }
-        if matches!(Status::from_wire(agent_status), Status::Idle | Status::Done))
+        if matches!(Status::of(agent_status.as_ref()), Status::Idle | Status::Done))
 }
 
 /// After the filter text changes, keep the current selection while it is
@@ -333,8 +337,9 @@ pub enum Indicators {
 }
 
 /// A live row's agent status, in the five kinds herdr draws a status
-/// icon for (client/shell.rs:177-236). The row keeps the wire string;
-/// it is classified only here, where the glyph and colour are chosen.
+/// icon for (client/shell.rs:177-236). The row keeps herdr's typed
+/// status; it is classified only here, where the glyph and colour are
+/// chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     Working,
@@ -345,17 +350,16 @@ pub enum Status {
 }
 
 impl Status {
-    /// Classify `agent_status` as `herdrcli::AgentStatus::as_str`
-    /// renders it. "blocked" arrives as `Other("blocked")` and renders
-    /// as "blocked"; anything unrecognized is `Unknown`, which herdr
-    /// draws muted.
-    pub fn from_wire(s: &str) -> Status {
-        match s {
-            "working" => Status::Working,
-            "blocked" => Status::Blocked,
-            "done" => Status::Done,
-            "idle" => Status::Idle,
-            _ => Status::Unknown,
+    /// Classify a live row's `agent_status`. "blocked" arrives as
+    /// `Other("blocked")`; anything else unrecognized, or no status at
+    /// all, is `Unknown`, which herdr draws muted.
+    pub fn of(agent_status: Option<&AgentStatus>) -> Status {
+        match agent_status {
+            Some(AgentStatus::Working) => Status::Working,
+            Some(AgentStatus::Other(s)) if s == "blocked" => Status::Blocked,
+            Some(AgentStatus::Done) => Status::Done,
+            Some(AgentStatus::Idle) => Status::Idle,
+            Some(AgentStatus::Unknown | AgentStatus::Other(_)) | None => Status::Unknown,
         }
     }
 
@@ -885,7 +889,7 @@ fn list_lines(
 fn row_line(row: &Row, column: usize, width: usize, ind: Indicators, selected: bool) -> ViewLine {
     let (glyph, glyph_tone, address_tone, meta) = match &row.state {
         RowState::Live { agent_status, .. } => {
-            let status = Status::from_wire(agent_status);
+            let status = Status::of(agent_status.as_ref());
             (
                 status.glyph(ind),
                 Tone::Status(status),
@@ -960,7 +964,7 @@ fn fresh_tail(row: &Row, armed: bool) -> &'static str {
     let RowState::Live { agent_status, .. } = &row.state else {
         return "fresh ctrl+f"; // unreachable: running(row) already requires Live.
     };
-    match Status::from_wire(agent_status) {
+    match Status::of(agent_status.as_ref()) {
         Status::Idle | Status::Done if armed => "ctrl+f again: stop agent, start fresh",
         Status::Idle | Status::Done => "fresh ctrl+f",
         Status::Working => "agent working, wait or exit",
@@ -1016,12 +1020,16 @@ mod tests {
         }
     }
 
+    fn wire_status(wire: &str) -> Status {
+        Status::of(Some(&AgentStatus::from_wire(wire)))
+    }
+
     fn live(address: &str, status: &str) -> Row {
         row(
             address,
             RowState::Live {
                 workspace_id: format!("w-{address}"),
-                agent_status: status.to_string(),
+                agent_status: Some(AgentStatus::from_wire(status)),
             },
         )
     }
@@ -1152,6 +1160,26 @@ mod tests {
         assert_eq!(update(running, Event::Fresh).done, None);
         let none = typed(AppState::new(sample_rows()), "zzz");
         assert_eq!(update(none, Event::Fresh).done, None);
+    }
+
+    #[test]
+    fn a_live_row_with_no_status_is_running_and_never_arms() {
+        // herdr sent no agent_status: fail closed, as attached, not as
+        // the bare shell the wire value "unknown" is.
+        let row = Row {
+            address: "home/garden".to_string(),
+            state: RowState::Live {
+                workspace_id: "w9".to_string(),
+                agent_status: None,
+            },
+            brief: String::new(),
+        };
+        assert!(running(&row));
+        assert!(!arm_eligible(&row));
+        let state = update(AppState::new(vec![row.clone()]), Event::Fresh);
+        assert_eq!(state.done, None);
+        assert_eq!(state.armed, None);
+        assert_eq!(fresh_tail(&row, false), "agent busy, wait or exit");
     }
 
     #[test]
@@ -1873,7 +1901,7 @@ mod tests {
 
     #[test]
     fn blocked_is_a_cross_under_symbols_and_a_dot_under_dots() {
-        assert_eq!(Status::from_wire("blocked"), Status::Blocked);
+        assert_eq!(wire_status("blocked"), Status::Blocked);
         assert_eq!(Status::Blocked.glyph(Indicators::Symbols), "×");
         assert_eq!(Status::Blocked.glyph(Indicators::Dots), "●");
         let state = AppState::new(vec![live("home/garden", "blocked")]);
@@ -1893,7 +1921,7 @@ mod tests {
             ("unknown", Status::Unknown, "·", "·"),
         ];
         for (wire, status, dot, symbol) in table {
-            assert_eq!(Status::from_wire(wire), status, "{wire}");
+            assert_eq!(wire_status(wire), status, "{wire}");
             assert_eq!(status.word(), wire);
             assert_eq!(status.glyph(Indicators::Dots), dot, "{wire}");
             assert_eq!(status.glyph(Indicators::Symbols), symbol, "{wire}");
@@ -1901,8 +1929,9 @@ mod tests {
             assert_eq!(cells(symbol), 1, "{symbol}");
         }
         for wire in ["", "Working", "asleep"] {
-            assert_eq!(Status::from_wire(wire), Status::Unknown, "{wire:?}");
+            assert_eq!(wire_status(wire), Status::Unknown, "{wire:?}");
         }
+        assert_eq!(Status::of(None), Status::Unknown);
         // A live row whose status is not recognized reads as unknown,
         // glyph and word alike.
         let state = AppState::new(vec![live("home/garden", "asleep")]);

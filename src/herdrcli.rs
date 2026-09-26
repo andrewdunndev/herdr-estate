@@ -93,18 +93,23 @@ impl<'de> Deserialize<'de> for AgentStatus {
     where
         D: serde::Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        Ok(match s.as_str() {
-            "working" => AgentStatus::Working,
-            "idle" => AgentStatus::Idle,
-            "done" => AgentStatus::Done,
-            "unknown" => AgentStatus::Unknown,
-            _ => AgentStatus::Other(s),
-        })
+        Ok(AgentStatus::from_wire(&String::deserialize(deserializer)?))
     }
 }
 
 impl AgentStatus {
+    /// The variant for herdr's wire value `s`; anything unrecognized is
+    /// kept as `Other`.
+    pub fn from_wire(s: &str) -> AgentStatus {
+        match s {
+            "working" => AgentStatus::Working,
+            "idle" => AgentStatus::Idle,
+            "done" => AgentStatus::Done,
+            "unknown" => AgentStatus::Unknown,
+            _ => AgentStatus::Other(s.to_string()),
+        }
+    }
+
     /// The wire value this variant round-trips from, for display (the
     /// picker's row list shows this next to a live campaign).
     pub fn as_str(&self) -> &str {

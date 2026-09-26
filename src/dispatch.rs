@@ -161,6 +161,7 @@ fn focus(address: &str, workspace_id: String) -> Result<(), EstateError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::herdrcli::AgentStatus;
     use crate::test_support::{EnvGuard, FakeHerdr, TempDir};
 
     /// Same shape as `verbs`'s own `make_fixture`: one estate, `home`,
@@ -245,7 +246,7 @@ mod tests {
             address: "home/garden".to_string(),
             state: RowState::Live {
                 workspace_id: "w9".to_string(),
-                agent_status: "working".to_string(),
+                agent_status: Some(AgentStatus::Working),
             },
             brief: String::new(),
         };
@@ -290,7 +291,7 @@ mod tests {
             address: "home/garden".to_string(),
             state: RowState::Live {
                 workspace_id: "w9".to_string(),
-                agent_status: "working".to_string(),
+                agent_status: Some(AgentStatus::Working),
             },
             brief: String::new(),
         };
@@ -593,7 +594,7 @@ mod tests {
             address: "home/garden".to_string(),
             state: RowState::Live {
                 workspace_id: "w1".to_string(),
-                agent_status: "working".to_string(),
+                agent_status: Some(AgentStatus::Working),
             },
             brief: String::new(),
         };
@@ -636,7 +637,7 @@ mod tests {
             address: "home/attic".to_string(),
             state: RowState::Live {
                 workspace_id: "gone-w1".to_string(),
-                agent_status: "working".to_string(),
+                agent_status: Some(AgentStatus::Working),
             },
             brief: String::new(),
         };
@@ -671,7 +672,7 @@ mod tests {
             address: "home/garden".to_string(),
             state: RowState::Live {
                 workspace_id: "w1".to_string(),
-                agent_status: "unknown".to_string(),
+                agent_status: Some(AgentStatus::Unknown),
             },
             brief: String::new(),
         };
