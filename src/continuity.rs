@@ -70,7 +70,13 @@ pub(crate) fn now_utc_iso() -> String {
 /// crate is outside this crate's dependency budget. Falls back to
 /// `"unknown"` rather than failing continuity over a missing binary.
 fn hostname() -> String {
-    std::process::Command::new("hostname")
+    hostname_from("hostname")
+}
+
+/// `hostname` with the command to run as a parameter, so a test can
+/// point it at a fake instead of the machine's own.
+fn hostname_from(command: &str) -> String {
+    std::process::Command::new(command)
         .output()
         .ok()
         .filter(|o| o.status.success())
@@ -231,34 +237,41 @@ mod tests {
         }
     }
 
-    #[test]
-    fn hostname_matches_the_real_hostname_command() {
-        // Guards against the whole function being replaceable by a
-        // hardcoded string: compare its result against a fresh,
-        // independent shell-out to the same command, not against itself.
-        let expected = std::process::Command::new("hostname")
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "unknown".to_string());
-        assert_eq!(hostname(), expected);
+    /// An executable at `dir/name` running `body` under `/bin/sh`.
+    fn fake_command(dir: &Path, name: &str, body: &str) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path.to_str().unwrap().to_string()
     }
 
     #[test]
-    fn appended_line_hostname_field_matches_the_real_hostname_command() {
-        let expected = std::process::Command::new("hostname")
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "unknown".to_string());
+    fn hostname_is_the_commands_trimmed_output() {
+        let d = TempDir::new();
+        let cmd = fake_command(d.path(), "host", "printf '  test-host\\n'");
+        assert_eq!(hostname_from(&cmd), "test-host");
+    }
+
+    #[test]
+    fn a_failing_silent_or_missing_hostname_command_reads_as_unknown() {
+        let d = TempDir::new();
+        let failing = fake_command(d.path(), "failing", "echo test-host; exit 1");
+        let silent = fake_command(d.path(), "silent", "printf '\\n'");
+        let missing = d.path().join("missing").to_str().unwrap().to_string();
+        for cmd in [failing, silent, missing] {
+            assert_eq!(hostname_from(&cmd), "unknown", "{cmd}");
+        }
+    }
+
+    #[test]
+    fn an_appended_line_carries_the_hostname_between_time_and_id() {
         let d = TempDir::new();
         append(d.path(), "sid").unwrap();
         let written = &read(d.path())[0];
         let fields: Vec<&str> = written.split_whitespace().collect();
-        assert_eq!(fields[1], expected);
+        assert_eq!(fields.len(), 3, "{written}");
+        assert_eq!(fields[1], hostname());
+        assert_eq!(fields[2], "sid");
     }
 }
