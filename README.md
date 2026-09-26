@@ -3,7 +3,7 @@
 # dunn.dev/herdr-estate
 
 [![pipeline](https://gitlab.com/dunn.dev/herdr-estate/badges/main/pipeline.svg)](https://gitlab.com/dunn.dev/herdr-estate/-/pipelines)
-[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![license](https://img.shields.io/badge/license-MIT_AND_Apache--2.0-green)](#license)
 ![built with GitLab](https://img.shields.io/badge/built_with-GitLab-FC6D26?logo=gitlab)
 
 herdr-estate is a plugin for the [herdr](https://herdr.dev) terminal
@@ -147,6 +147,12 @@ next call. Tests drive a fake herdr through `$HERDR_BIN_PATH`.
 popup's own, the popup hands it to a `dispatch-*` action, which runs
 `pick --dispatch`, over the API socket herdr names in
 `HERDR_SOCKET_PATH`.
+
+## License
+
+MIT, in [LICENSE](LICENSE), except `src/picker/theme.rs`, which adapts
+herdr's palettes and theme resolution under Apache-2.0, in
+[LICENSE-APACHE-HERDR](LICENSE-APACHE-HERDR).
 
 ---
 
