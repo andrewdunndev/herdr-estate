@@ -431,7 +431,7 @@ fn worktree_fixture() -> (Fixture, std::path::PathBuf) {
 }
 
 #[test]
-fn a_refused_launch_leaves_no_worktree_behind() {
+fn a_launch_its_guards_refuse_leaves_no_worktree_behind() {
     let (f, worktree) = worktree_fixture();
     f.fake.set_response(
         0,
