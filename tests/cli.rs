@@ -491,6 +491,66 @@ fn a_launch_past_its_guards_creates_the_worktree_and_starts_there() {
 }
 
 #[test]
+fn two_concurrent_launches_of_one_address_create_one_workspace() {
+    let (f, root) = fixture();
+    make_campaign(&root, "garden", "---\n---\n");
+    write_estate_toml(
+        &f.config_dir,
+        &format!(
+            "[estate.home]\nroot = {:?}\nprepare = [\"/bin/sleep\", \"1\"]\n",
+            root.to_string_lossy()
+        ),
+    );
+    let fake_dir = root.parent().unwrap().join("race-herdr");
+    std::fs::create_dir_all(&fake_dir).unwrap();
+    let creates = fake_dir.join("creates");
+    let script = fake_dir.join("herdr");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\ncase \"$1 $2\" in\n\
+             \"workspace list\") echo '{{\"result\":{{\"workspaces\":[]}}}}' ;;\n\
+             \"workspace create\") echo x >> {creates:?}; \
+             echo '{{\"result\":{{\"workspace\":{{\"workspace_id\":\"w9\"}},\"root_pane\":{{\"pane_id\":\"w9:p1\"}}}}}}' ;;\n\
+             *) echo '{{\"result\":{{}}}}' ;;\nesac\n"
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let launch = || {
+        Command::new(env!("CARGO_BIN_EXE_herdr-estate"))
+            .args(["fresh", "home/garden"])
+            .env_clear()
+            .env("HOME", &f.home)
+            .env("HERDR_PLUGIN_CONFIG_DIR", &f.config_dir)
+            .env("HERDR_PLUGIN_STATE_DIR", &f.state_dir)
+            .env("HERDR_BIN_PATH", &script)
+            .env("PATH", "/usr/bin:/bin")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    let (first, second) = (launch(), launch());
+    let outs = [
+        first.wait_with_output().unwrap(),
+        second.wait_with_output().unwrap(),
+    ];
+    let created = std::fs::read_to_string(&creates).unwrap_or_default();
+    assert_eq!(created.lines().count(), 1, "{outs:?}");
+    let refused: Vec<_> = outs.iter().filter(|o| !o.status.success()).collect();
+    assert_eq!(refused.len(), 1, "{outs:?}");
+    assert!(
+        stderr(refused[0]).contains("another herdr-estate run"),
+        "{}",
+        stderr(refused[0])
+    );
+}
+
+#[test]
 fn address_derived_from_herdr_workspace_id_when_omitted() {
     let (f, root) = fixture();
     make_campaign(&root, "garden", "---\n---\n");

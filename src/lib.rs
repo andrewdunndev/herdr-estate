@@ -12,6 +12,7 @@ mod doubleopen;
 mod errors;
 mod frontmatter;
 mod herdrcli;
+mod lock;
 mod name;
 mod ownership;
 mod paths;

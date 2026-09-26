@@ -33,6 +33,7 @@ use crate::herdrcli::{
     self, AgentStatus, HerdrResult, Workspace, WorkspaceCreateResult, WorkspaceGetResult,
     WorkspaceRef,
 };
+use crate::lock;
 use crate::name::{self, agent_name};
 use crate::ownership;
 use crate::progress;
@@ -740,6 +741,7 @@ pub(crate) fn resume_with_ids(
     dry_run: bool,
 ) -> Result<VerbResult, EstateError> {
     let campaign = campaign::resolve(estates, address)?;
+    let _lock = (!dry_run).then(|| lock::acquire(address)).transpose()?;
     let conversation_id = continuity::latest_conversation(&campaign.dir);
     let conversation_id = match conversation_id {
         Some(id) => id,
@@ -814,6 +816,7 @@ pub(crate) fn fresh_with_ids(
     dry_run: bool,
 ) -> Result<VerbResult, EstateError> {
     let campaign = campaign::resolve(estates, address)?;
+    let _lock = (!dry_run).then(|| lock::acquire(address)).transpose()?;
     fresh_resolved(&campaign, address, dry_run)
 }
 
@@ -843,6 +846,7 @@ pub(crate) fn fresh_with_ids_stop_running(
     address: &str,
 ) -> Result<VerbResult, EstateError> {
     let campaign = campaign::resolve(estates, address)?;
+    let _lock = lock::acquire(address)?;
     let old_id = continuity::latest_conversation(&campaign.dir);
     stop_registry_guard(&campaign, address, &old_id)?;
     let ws = check_replaceable_running_workspace(address)?;

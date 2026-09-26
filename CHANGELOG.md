@@ -13,6 +13,11 @@
   still holds in the popup, as does herdr's own error for a run that
   never started. The popup waits on the run for at most 120 seconds,
   then names its plugin log entry.
+- Two launches of one address at once, from two popups or a popup and
+  a shell, no longer both create a workspace under its label. A launch
+  takes a lock for its campaign in the state dir, and the second one
+  refuses, naming the first one's pid, until the first finishes. A lock
+  left by a run that died is taken over.
 - `--help` and `-h` print the verbs and their flags, and write
   nothing to `events.log`.
 - A shell run now finds the estate table where the picker does, in

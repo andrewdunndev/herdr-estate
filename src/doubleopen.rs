@@ -44,7 +44,7 @@ use crate::paths::home_dir;
 /// (the same dependency-free tradeoff `continuity::hostname` makes for
 /// `gethostname(2)`). A "not found" and a "found but owned by someone
 /// else" exit the same way here: either is "not a holder".
-fn pid_alive(pid: u32) -> bool {
+pub(crate) fn pid_alive(pid: u32) -> bool {
     std::process::Command::new("kill")
         .args(["-0", &pid.to_string()])
         .output()
