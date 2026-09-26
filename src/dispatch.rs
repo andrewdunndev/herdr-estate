@@ -47,7 +47,7 @@ pub fn open_row(estates: &toml::Table, row: &Row) -> Result<(), EstateError> {
 /// workspace when the list was built; the picker can sit open for a
 /// while, so that workspace's liveness (or existence) is re-read here
 /// rather than trusted from the stale row. Only a workspace that is
-/// genuinely alive right now is focus-only — anything else (the agent
+/// genuinely alive right now is focus-only. Anything else (the agent
 /// exited, the workspace closed, a duplicate label) goes through
 /// `resume_with_ids`, which owns the alive check, the
 /// close-and-recreate decision and the duplicate-label refusal, exactly

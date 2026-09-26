@@ -1,10 +1,10 @@
 //! A minimal, tolerant reader for campaign.md's YAML frontmatter.
 //!
 //! Not a YAML parser: it understands exactly the three shapes a campaign
-//! file uses — a top-level scalar (`agent: claude`), a list (flow
+//! file uses: a top-level scalar (`agent: claude`), a list (flow
 //! `paths: [a, b]` or block `paths:` / `  - a`), and one level of nested
 //! table for a per-kind flag block (`claude:` / `  remote-control: true`).
-//! Unknown top-level keys are kept, not rejected — an older or newer
+//! Unknown top-level keys are kept, not rejected, so an older or newer
 //! campaign file, or a key some other tool reads, never breaks the parse.
 
 use std::collections::BTreeMap;
@@ -19,8 +19,8 @@ pub enum Scalar {
 
 /// A frontmatter value: a bare scalar, a list of strings, or a one-level
 /// table of scalars. An empty `key:` with nothing under it parses as an
-/// empty table — it only becomes a list once a `- item` line under it is
-/// seen.
+/// empty table, and becomes a list only once a `- item` line under it
+/// is seen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     Scalar(Scalar),
@@ -309,8 +309,8 @@ mod tests {
 
     #[test]
     fn single_char_value_is_left_alone() {
-        // Below strip_quotes's len>=2 guard — must not touch the byte,
-        // let alone index past it.
+        // Below strip_quotes's len>=2 guard, so it must not touch the
+        // byte, let alone index past it.
         let d = parse_frontmatter("---\nagent: x\n---\n");
         assert_eq!(s(&d["agent"]), "x");
     }
@@ -354,8 +354,8 @@ mod tests {
 
     #[test]
     fn frontmatter_text_ending_exactly_at_a_keys_colon() {
-        // The whole document — not just the line — ends at the colon:
-        // no trailing newline, nothing after it at all.
+        // The whole document ends at the colon, not just the line: no
+        // trailing newline, nothing after it at all.
         let d = parse_frontmatter("---\nworktree:");
         let t = d["worktree"].as_table().unwrap();
         assert!(t.is_empty());
