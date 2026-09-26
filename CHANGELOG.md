@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.2.1 - 2026-09-25
+
 - A bare shell invocation now resolves the state dir to the same
   `.../herdr/plugins/herdr-estate` directory herdr itself hands the
   picker, instead of a separate `.../herdr-estate`. The picker no
