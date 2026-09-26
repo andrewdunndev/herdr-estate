@@ -1,15 +1,3 @@
-//! Per-kind adapters: turn a resolved Campaign plus a verb into the
-//! agent's own argv. Generic keys map through the small table the design
-//! note gives (paths, prompts, address, conversation id); a kind's own
-//! frontmatter table (`claude:` in campaign.md) passes straight through as
-//! `--<key>` flags, true meaning a bare flag and any other value meaning
-//! `--<key> <value>`.
-//!
-//! Shipped: claude. An unknown kind gets no mapped flags at all — one
-//! warning line, then bin/herdr-estate runs `<kind>` with nothing appended
-//! but the bare conversation verb; adding a kind later is adding one more
-//! match arm.
-
 use std::path::Path;
 
 use crate::campaign::{AgentKind, Campaign};
@@ -63,11 +51,6 @@ pub fn claude_argv(
     argv
 }
 
-/// Dispatch on `campaign.kind`. An unrecognised kind warns once to
-/// stderr and starts the bare kind name with nothing appended but the
-/// bare conversation verb — adding a kind later is adding one match arm
-/// plus one `AgentKind` variant, not a registry lookup that can silently
-/// return nothing for a typo'd shipped kind.
 pub fn build_argv(
     campaign: &Campaign,
     verb: Verb,
@@ -210,14 +193,8 @@ mod tests {
         assert_eq!(argv[0], "claude");
     }
 
-    // --- mutation-note gaps: argv accumulation and the false-flag continue ---
-
     #[test]
     fn every_argv_component_survives_together() {
-        // Guards the "argv = [...]" (wipe) vs "argv += [...]" (accumulate)
-        // mutation class: with every optional piece present at once,
-        // nothing earlier in the vector may be dropped by something
-        // built later.
         let mut c = campaign();
         c.address = "home/garden".to_string();
         c.add_dirs = vec![
@@ -257,11 +234,6 @@ mod tests {
 
     #[test]
     fn a_false_flag_does_not_truncate_flags_that_sort_after_it() {
-        // Guards the `continue` (skip this one) vs `break` (drop
-        // everything after it) mutation class in the kind-flags loop:
-        // "aaa" sorts before the false "bbb", "ccc" sorts after it, and
-        // BTreeMap iterates in key order, so this exercises a false
-        // value with real entries on both sides of it.
         let mut c = campaign();
         c.kind_flags.insert("aaa".to_string(), Scalar::Bool(true));
         c.kind_flags.insert("bbb".to_string(), Scalar::Bool(false));

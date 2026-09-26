@@ -1,6 +1,3 @@
-//! Resolve estate/campaign into a directory, a working directory, and the
-//! pieces a per-kind adapter needs (paths, prompt files, kind flags).
-
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -10,9 +7,6 @@ use crate::frontmatter::{self, Scalar};
 use crate::paths::expand;
 use crate::worktree;
 
-/// The agent kind a campaign runs under. `Claude` is the one shipped
-/// adapter; anything else is kept verbatim so `adapters::build_argv` can
-/// warn once and start it with no mapped flags.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentKind {
     Claude,
@@ -44,24 +38,14 @@ pub struct Campaign {
     pub workdir: PathBuf,
     pub kind: AgentKind,
     pub add_dirs: Vec<PathBuf>,
-    /// `paths` entries left out of `add_dirs` because nothing is there
-    /// (moved, renamed, never checked out). Resolving says nothing about
-    /// them: the verbs report them once their guards have passed, and a
-    /// dry run prints them in its plan.
     pub missing_add_dirs: Vec<PathBuf>,
     pub prompt_files: Vec<PathBuf>,
     pub kind_flags: BTreeMap<String, Scalar>,
     pub env: BTreeMap<String, String>,
-    /// The estate's optional `prepare` command, argv form (no shell):
-    /// `None` when the estate row carries no `prepare` key.
     pub prepare: Option<Vec<String>>,
-    /// The campaign's `worktree`, when its frontmatter names both a repo
-    /// and a branch. `workdir` is then the path that worktree has or
-    /// would have; `materialise` creates it.
     pub worktree: Option<WorktreeSpec>,
 }
 
-/// A campaign's `worktree:` frontmatter, both keys present.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeSpec {
     pub repo: String,
@@ -88,8 +72,6 @@ fn toml_str_array(row: &toml::Table, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The estate's or campaign's `paths` list: string entries only, empty
-/// ones dropped before each path is rooted against the estate.
 fn non_empty_strings(v: Vec<String>) -> Vec<String> {
     v.into_iter().filter(|s| !s.is_empty()).collect()
 }
@@ -112,12 +94,6 @@ fn toml_to_scalar(v: &toml::Value) -> Scalar {
     }
 }
 
-/// An `env` table value rendered to the string herdr's `--env KEY=value`
-/// carries: a number or boolean prints the same as TOML wrote it, so it
-/// is never dropped the way a `.as_str()`-only filter would drop it.
-/// `None` for an array or table — there is no sane single-value rendering
-/// for those, so the caller turns that into a named
-/// `EstateError::Config` instead of a silent drop.
 fn toml_env_value(v: &toml::Value) -> Option<String> {
     match v {
         toml::Value::String(s) => Some(s.clone()),
@@ -136,15 +112,6 @@ fn scalar_non_empty_str(s: &Scalar) -> Option<&str> {
     }
 }
 
-/// The estate row's optional `prepare` command: a non-empty array of
-/// non-empty strings, argv form, no shell. Each element gets the same
-/// `~` and `$VAR` expansion `root` and `paths` get, so a command can
-/// name a script under the operator's home directory or reference an
-/// environment variable; a shell script's own variable of the same name
-/// is pre-empted before the child ever sees the argv. `None` when the
-/// row carries no `prepare` key at all; a named `EstateError::Config`
-/// otherwise, checked at resolve time so a broken estate never reaches
-/// `open_workspace`.
 fn estate_prepare(
     row: &toml::Table,
     estate_name: &str,
@@ -173,9 +140,6 @@ fn estate_prepare(
     Ok(Some(argv))
 }
 
-/// The estate's row in the table, its root, expanded, which must be a
-/// directory, and `<root>/<campaigns>`, which may not exist: what every
-/// path in the estate hangs off.
 fn estate_dirs<'a>(
     estates: &'a toml::Table,
     estate_name: &str,
@@ -205,17 +169,10 @@ fn estate_dirs<'a>(
     Ok((row, root, campaigns))
 }
 
-/// `<root>/<campaigns>`: where the estate's campaigns live. It may not
-/// exist.
 pub fn campaigns_dir(estates: &toml::Table, estate_name: &str) -> Result<PathBuf, EstateError> {
     estate_dirs(estates, estate_name).map(|(_, _, campaigns)| campaigns)
 }
 
-/// Everything the verbs need to know about `address`, read from the
-/// estate table, the campaign's frontmatter and the disk, changing
-/// nothing: a worktree the campaign names is looked up, not created,
-/// so a verb can run every guard before anything exists. `materialise`
-/// is the step that creates it.
 pub fn resolve(estates: &toml::Table, address: &str) -> Result<Campaign, EstateError> {
     let (estate_name, campaign_name) = parse_address(address)?;
     let (row, root, campaigns) = estate_dirs(estates, &estate_name)?;
@@ -255,10 +212,6 @@ pub fn resolve(estates: &toml::Table, address: &str) -> Result<Campaign, EstateE
         if add_dirs.contains(&rp) || missing_add_dirs.contains(&rp) {
             continue;
         }
-        // A path an operator's estate or campaign named but that isn't
-        // there would otherwise reach the agent's `--add-dir` and fail
-        // the launch outright; skip it, and let the verb say so, rather
-        // than let one stale entry block the whole campaign.
         if !rp.exists() {
             missing_add_dirs.push(rp);
             continue;
@@ -305,8 +258,6 @@ pub fn resolve(estates: &toml::Table, address: &str) -> Result<Campaign, EstateE
         }
     }
 
-    // `{address}` in a value becomes this campaign's address, so one estate
-    // row can hand each workspace a value naming its own campaign.
     let mut env: BTreeMap<String, String> = BTreeMap::new();
     if let Some(t) = row.get("env").and_then(|v| v.as_table()) {
         for (k, v) in t.iter() {
@@ -336,12 +287,6 @@ pub fn resolve(estates: &toml::Table, address: &str) -> Result<Campaign, EstateE
     })
 }
 
-/// `campaign` with its worktree, if it names one, created: the one
-/// step between resolving and launching that changes the disk, run by
-/// a verb only once its guards have passed. git may register the
-/// worktree under another spelling of the path `resolve` predicted (a
-/// symlinked temp dir, say), so `workdir` and its `add_dirs` entry take
-/// the path `ensure_worktree` returns.
 pub fn materialise(campaign: &Campaign) -> Result<Campaign, EstateError> {
     let mut materialised = campaign.clone();
     if let Some(spec) = &campaign.worktree {
@@ -705,7 +650,6 @@ mod tests {
         assert_ne!(c.workdir, root);
         assert!(c.add_dirs.contains(&c.workdir));
         assert_eq!(c.add_dirs.len(), resolved.add_dirs.len());
-        // Idempotent: a second materialise finds the same worktree.
         assert_eq!(materialise(&resolved).unwrap().workdir, c.workdir);
     }
 
@@ -737,7 +681,6 @@ mod tests {
         );
         let estates = estates_with(row(&root));
         let c = resolve(&estates, "home/garden").unwrap();
-        // No worktree ensured: the plain estate root, untouched.
         assert_eq!(c.workdir, root);
     }
 
@@ -864,8 +807,6 @@ mod tests {
         let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.add_dirs, [present]);
         assert_eq!(c.missing_add_dirs, [absent]);
-        // Resolving runs before every guard and under --dry-run, so it
-        // logs nothing; the verb reports the skip once it proceeds.
         assert!(crate::progress::logged_messages().is_empty());
     }
 

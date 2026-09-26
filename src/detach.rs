@@ -1,21 +1,3 @@
-//! A picker dispatch that outlives the popup it was chosen in.
-//!
-//! herdr runs the picker popup in the workspace it was opened over, and
-//! closing that workspace ends the popup's whole session: SIGHUP, then
-//! SIGTERM, then SIGKILL, to every process in it, whichever signals it
-//! ignores and whichever process group it sits in. A dispatch that
-//! closes the popup's own workspace (Ctrl-f's second press on its row,
-//! or Enter or Ctrl-f on it once its agent has exited) died right
-//! there, after the close and before the create.
-//!
-//! So the popup hands that dispatch to herdr: it invokes one of the
-//! manifest's `dispatch-*` actions, which herdr runs as its own process,
-//! outside every workspace, the way it runs any plugin action. The
-//! action runs `pick --dispatch <action>`, and the address rides in the
-//! invocation's context as the workspace label it is. The popup waits
-//! on that run's plugin log entry, so a refusal made before the close
-//! still shows, held, in the popup.
-
 use std::time::Duration;
 
 use crate::doubleopen;
@@ -28,23 +10,12 @@ use crate::picker::shell::PLUGIN_ID;
 use crate::progress;
 use crate::verbs;
 
-/// How the popup waits on a handed-off run: how often it re-reads the
-/// run's log entry, how long it waits in all, and how many reads in a
-/// row may miss the entry before that is an error.
 struct Wait {
     poll: Duration,
     deadline: Duration,
     missing_polls: u32,
 }
 
-/// A handed-off run is one verb: at most `verbs::PREPARE_TIMEOUT_SECS`
-/// in the estate's `prepare` and `verbs::AGENT_START_TIMEOUT_MS` waiting
-/// on the agent, plus `DEADLINE_MARGIN_SECS` for everything around them
-/// (the guards' reads, the close, the create, the focus): 120 s. Past
-/// that, the popup stops waiting and says where the run's log is; the
-/// run itself carries on in herdr. A new entry can take a read or two
-/// to show in the listing, so a few misses are retried before one is
-/// an error.
 fn production_wait() -> Wait {
     Wait {
         poll: Duration::from_millis(500),
@@ -57,18 +28,10 @@ fn dispatch_deadline_secs() -> u64 {
     verbs::PREPARE_TIMEOUT_SECS + verbs::agent_start_timeout_secs() + DEADLINE_MARGIN_SECS
 }
 
-/// `production_wait`'s allowance past the prepare and the agent start,
-/// for the reads and calls around them.
 const DEADLINE_MARGIN_SECS: u64 = 30;
 
-/// How many of the plugin's newest log entries each read asks for,
-/// explicitly: herdr's default page is undocumented, and `[[events]]`
-/// runs share this plugin's log.
 const LOG_LIMIT: &str = "50";
 
-/// What a picker row asked for: Enter (`open`), Ctrl-f (`fresh`), or
-/// Ctrl-f's second press on an idle or done agent (`stop`). Each has its
-/// own manifest action, `dispatch-<arg>`, running `pick --dispatch <arg>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowAction {
     Open,
@@ -94,15 +57,11 @@ impl RowAction {
         }
     }
 
-    /// The manifest action that runs this one outside the popup.
     pub fn action_id(self) -> String {
         format!("dispatch-{}", self.as_arg())
     }
 }
 
-/// One string field of the context herdr hands a plugin pane or action,
-/// `$HERDR_PLUGIN_CONTEXT_JSON`. `None` in a shell, or when the context
-/// is missing, malformed or leaves the field empty.
 fn context_field(key: &str) -> Option<String> {
     let json = non_empty_env("HERDR_PLUGIN_CONTEXT_JSON")?;
     let context: serde_json::Value = serde_json::from_str(&json).ok()?;
@@ -113,15 +72,10 @@ fn context_field(key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The workspace the popup was opened over. herdr sets no
-/// `$HERDR_WORKSPACE_ID` in a plugin pane; it names the workspace in
-/// the pane's context instead.
 pub fn popup_workspace_id() -> Option<String> {
     context_field("workspace_id")
 }
 
-/// The address a `dispatch-*` action acts on: its invocation context's
-/// workspace label, which `hand_off` sets to the row's address.
 pub fn context_address() -> Result<String, EstateError> {
     context_field("workspace_label").ok_or_else(|| {
         EstateError::Usage(
@@ -131,12 +85,8 @@ pub fn context_address() -> Result<String, EstateError> {
     })
 }
 
-/// The action and address to hand off when `outcome` acts on the row
-/// whose live workspace is `popup_workspace`. Only such a row can be
-/// closed under the popup: a dormant or new row has no workspace, and a
-/// live one elsewhere closes some other workspace. A live row's id is
-/// the one the list build saw, and the popup's own workspace stays open
-/// for as long as the popup does, so that id is still the popup's here.
+// Closing a workspace SIGHUPs, SIGTERMs, then SIGKILLs every process in
+// it, so a run that closes its own must be handed to a herdr action.
 pub fn self_hosted<'a>(
     outcome: &'a Outcome,
     popup_workspace: Option<&str>,
@@ -155,13 +105,6 @@ pub fn self_hosted<'a>(
     }
 }
 
-/// A shell `resume` or `fresh` run from a pane inside the workspace it
-/// would close ends partway the same way the popup did, so it is handed
-/// to herdr too: `Some` with the run's result when this process runs in
-/// a pane (`$HERDR_WORKSPACE_ID`, not a plugin action or pane) of the
-/// live, owned workspace `address` names and that workspace's agent has
-/// exited. `None` leaves the verb to run here, where every other case
-/// either closes some other workspace or refuses before any close.
 pub fn shell_hand_off(action: RowAction, address: &str) -> Result<Option<bool>, EstateError> {
     if non_empty_env("HERDR_PLUGIN_ACTION_ID").is_some()
         || non_empty_env("HERDR_PLUGIN_ENTRYPOINT_ID").is_some()
@@ -183,13 +126,6 @@ pub fn shell_hand_off(action: RowAction, address: &str) -> Result<Option<bool>, 
     hand_off(action, address, &own).map(Some)
 }
 
-/// Invoke `action`'s manifest action for `address`, whose workspace is
-/// `workspace_id`, and wait for herdr to finish running it. The
-/// invocation goes over the API socket: `herdr plugin action invoke`
-/// fills the context from whichever workspace has focus, and the
-/// address must not depend on that. `Ok(true)` when the run succeeded;
-/// `Ok(false)` when it failed, its output relayed to stderr. An
-/// invocation herdr refuses is an error here, before anything changed.
 pub fn hand_off(action: RowAction, address: &str, workspace_id: &str) -> Result<bool, EstateError> {
     let plugin_id = non_empty_env("HERDR_PLUGIN_ID").unwrap_or_else(|| PLUGIN_ID.to_string());
     let action_id = action.action_id();
@@ -205,6 +141,8 @@ pub fn hand_off(action: RowAction, address: &str, workspace_id: &str) -> Result<
         other => other,
     }
     };
+    // Not `herdr plugin action invoke`: it takes the context from the
+    // focused workspace, which may not be this one.
     let invoked = herdrcli::call_api(
         "plugin.action.invoke",
         serde_json::json!({
@@ -225,15 +163,9 @@ pub fn hand_off(action: RowAction, address: &str, workspace_id: &str) -> Result<
     wait_for_run(&plugin_id, log_id, &production_wait()).map_err(pinned)
 }
 
-/// The herdr this plugin's hand-off is built and tested against, and
-/// the API protocol it speaks (`ping`'s `protocol`).
 const TESTED_HERDR: &str = "0.9.1";
 const MIN_PROTOCOL: u64 = 22;
 
-/// herdr's `ping` over the API socket, before anything is invoked: an
-/// older protocol than `MIN_PROTOCOL`, or a reply with none, refuses
-/// with the expected and actual versions. Returns "herdr <version>,
-/// protocol <n>" for later errors to name.
 fn check_protocol() -> Result<String, EstateError> {
     let pong = herdrcli::call_api("ping", serde_json::json!({}))?;
     let version = pong["version"].as_str().unwrap_or("of unknown version");
@@ -248,12 +180,6 @@ fn check_protocol() -> Result<String, EstateError> {
     }
 }
 
-/// Poll `plugin log list` until `log_id` is no longer running. A failed
-/// run's stderr, its progress lines and its error, is written to this
-/// process's stderr so the popup shows why, and so is herdr's own
-/// `error` for a run that never started (a missing binary, say). A run
-/// still going at `wait.deadline`, or an entry missing from
-/// `wait.missing_polls` reads in a row, is an error naming the entry.
 fn wait_for_run(plugin_id: &str, log_id: &str, wait: &Wait) -> Result<bool, EstateError> {
     let started = std::time::Instant::now();
     let mut missed = 0;
@@ -310,8 +236,6 @@ fn wait_for_run(plugin_id: &str, log_id: &str, wait: &Wait) -> Result<bool, Esta
     }
 }
 
-/// A failed run's `stderr`, then herdr's `error` when it set one, or a
-/// line naming the entry when neither says anything.
 fn relay_failure(entry: &serde_json::Value, log_id: &str, out: &mut impl std::io::Write) {
     let said = |key: &str| entry[key].as_str().filter(|s| !s.trim().is_empty());
     let stderr = said("stderr");
@@ -481,8 +405,6 @@ mod tests {
         }
     }
 
-    /// A stand-in for herdr's API socket: answers one connection per
-    /// entry of `replies`, in order, and hands back each request line.
     fn fake_api_seq(
         replies: Vec<String>,
     ) -> (std::path::PathBuf, std::thread::JoinHandle<Vec<String>>) {
@@ -512,8 +434,6 @@ mod tests {
 
     const PONG: &str = r#"{"id":"x","result":{"type":"pong","version":"0.9.1","protocol":22}}"#;
 
-    /// herdr 0.9.1's `ping`, then `reply` to the invoke; hands back the
-    /// invoke's request line.
     fn fake_api(reply: &'static str) -> (std::path::PathBuf, std::thread::JoinHandle<String>) {
         let (path, served) = fake_api_seq(vec![PONG.to_string(), reply.to_string()]);
         let invoke = std::thread::spawn(move || {

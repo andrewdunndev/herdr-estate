@@ -1,14 +1,3 @@
-//! Integration tests for `herdr-estate pick`: the `--render-once` golden
-//! frame, the "no half-true list" error path, and the `pick` action
-//! opening the popup rather than drawing. The interactive TUI
-//! itself needs a real terminal, so it is tried by hand in a herdr popup;
-//! this file covers everything reachable without a TTY.
-//!
-//! Same fixture shape as `tests/cli.rs`: each test spawns the compiled
-//! binary with its own `env_clear()`'d environment, `HERDR_BIN_PATH`
-//! pointed at a fake `herdr` that records exact argv and replays canned
-//! JSON.
-
 use std::path::Path;
 use std::process::Command;
 
@@ -30,10 +19,10 @@ fn append_session(cdir: &Path, when: &str, conversation_id: &str) {
 #[test]
 fn render_once_matches_the_pure_core_for_the_same_rows() {
     let (f, root) = fixture();
-    make_campaign(&root, "garden", "---\n---\n"); // will be live
-    let kitchen = make_campaign(&root, "kitchen", "---\n---\n# kitchen\nStock it.\n"); // dormant
+    make_campaign(&root, "garden", "---\n---\n");
+    let kitchen = make_campaign(&root, "kitchen", "---\n---\n# kitchen\nStock it.\n");
     append_session(&kitchen, "2026-09-10T00:00:00.000000+00:00", "conv-1");
-    make_campaign(&root, "attic", "---\n---\n"); // new
+    make_campaign(&root, "attic", "---\n---\n");
 
     f.fake.set_response(
         0,
@@ -50,12 +39,6 @@ fn render_once_matches_the_pure_core_for_the_same_rows() {
     );
     assert!(out.status.success(), "{}", stderr(&out));
 
-    // The golden frame, computed from the same pure core the binary
-    // itself calls, over the rows this fixture seeded on disk — an
-    // independent hand-transcription of the padding/truncation math
-    // would be one more place for an off-by-one to hide. `env_clear`
-    // and the fixture's own HOME mean there is no herdr config, so the
-    // binary draws herdr's default glyphs, dots.
     let expected_rows = vec![
         Row {
             address: "home/garden".to_string(),
@@ -89,19 +72,12 @@ fn render_once_matches_the_pure_core_for_the_same_rows() {
     assert_eq!(stdout(&out), expected);
     assert!(expected.lines().count() <= 8);
     assert!(expected.lines().all(|l| l.chars().count() <= 40));
-    // The live row carries its dot and the dormant row its brief, cut
-    // to the 5 cells 40 columns leave: the glyphs and the brief came
-    // through.
     assert!(expected.contains("> ● home/garden"), "{expected}");
     assert!(expected.contains("home/kitchen  Stoc… last"), "{expected}");
 }
 
 #[test]
 fn render_once_draws_the_status_glyphs_herdrs_config_names() {
-    // The operator's setting, in the file herdr itself reads: with no
-    // HERDR_CONFIG_PATH or XDG_CONFIG_HOME (`env_clear`), that is
-    // $HOME/.config/herdr/config.toml. The same live row that draws a
-    // dot with no config draws herdr's symbol for working here.
     let (f, root) = fixture();
     make_campaign(&root, "garden", "---\n---\n");
     let herdr_config = f.home.join(".config").join("herdr");
@@ -158,7 +134,7 @@ fn render_once_defaults_to_an_80_by_20_frame() {
 fn a_failed_workspace_list_refuses_and_never_opens_a_half_true_picker() {
     let (f, root) = fixture();
     make_campaign(&root, "garden", "---\n---\n");
-    f.fake.set_response(0, "", 1); // herdr itself fails
+    f.fake.set_response(0, "", 1);
     let out = run(&f, &["pick", "--render-once"], &[]);
     assert!(!out.status.success());
     assert!(stdout(&out).is_empty());
@@ -167,10 +143,6 @@ fn a_failed_workspace_list_refuses_and_never_opens_a_half_true_picker() {
 
 #[test]
 fn inside_herdr_the_popup_is_painted_herdrs_panel_before_the_list_is_read() {
-    // A failed `workspace list` ends the run before the picker opens, so
-    // stdout holds only the paint: vesper's panel, from the file herdr
-    // reads, set and cleared to, then SGR 0 on the way out. A run with
-    // no HERDR_PLUGIN_ID, from a shell, leaves its terminal alone.
     let painted = "\x1b[48;2;26;26;26m\x1b[38;2;255;255;255m\x1b[2J\x1b[1;1H\x1b[0m";
     for (plugin_id, want) in [(Some("herdr-estate"), painted), (None, "")] {
         let (f, root) = fixture();
@@ -210,9 +182,6 @@ fn pick_rejects_an_unknown_flag() {
 
 #[test]
 fn the_pick_action_opens_the_popup_instead_of_drawing() {
-    // How herdr runs the `pick` action from a key: no terminal, with
-    // HERDR_PLUGIN_ACTION_ID set. It must ask herdr for the picker pane,
-    // not try to draw (which failed with "could not start the terminal").
     let (f, _root) = fixture();
     f.fake.set_response(0, r#"{"result": {}}"#, 0);
     let out = Command::new(env!("CARGO_BIN_EXE_herdr-estate"))
@@ -252,10 +221,6 @@ fn the_pick_action_opens_the_popup_instead_of_drawing() {
 
 #[test]
 fn the_dispatch_stop_action_replaces_the_workspace_its_context_names() {
-    // How herdr runs `dispatch-stop` for a popup opened in w1: the
-    // manifest's argv, no address, the address in the invocation
-    // context. Everything after the close (create, ownership, agent
-    // start, sessions.log, the focus) runs in this one process.
     let (f, root) = fixture();
     let cdir = make_campaign(&root, "garden", "---\n---\n");
     append_session(&cdir, "2026-09-10T00:00:00.000000+00:00", "old-sid");
@@ -273,14 +238,14 @@ fn the_dispatch_stop_action_replaces_the_workspace_its_context_names() {
         r#"{"result": {"workspace": {"label": "home/garden", "agent_status": "idle", "pane_count": 1}}}"#,
         0,
     );
-    f.fake.set_response(2, r#"{"result": {}}"#, 0); // close
+    f.fake.set_response(2, r#"{"result": {}}"#, 0);
     f.fake.set_response(
         3,
         r#"{"result": {"workspace": {"workspace_id": "w9"}, "root_pane": {"pane_id": "w9:p1"}}}"#,
         0,
-    ); // create
-    f.fake.set_response(4, r#"{"result": {}}"#, 0); // agent start
-    f.fake.set_response(5, r#"{"result": {}}"#, 0); // focus
+    );
+    f.fake.set_response(4, r#"{"result": {}}"#, 0);
+    f.fake.set_response(5, r#"{"result": {}}"#, 0);
 
     let context = r#"{"workspace_id":"w1","workspace_label":"home/garden"}"#;
     let out = run(
@@ -303,8 +268,6 @@ fn the_dispatch_stop_action_replaces_the_workspace_its_context_names() {
 
 #[test]
 fn a_handed_off_refusal_exits_1_and_leaves_its_error_in_the_log() {
-    // Refused before anything changes, so the popup is still there to
-    // hold the error the handed-off process printed and logged.
     let (f, root) = fixture();
     make_campaign(&root, "garden", "---\n---\n");
     f.fake.set_response(

@@ -1,5 +1,3 @@
-//! The estate table: estates.toml, and the address it's keyed by.
-
 use std::path::{Path, PathBuf};
 
 use crate::errors::EstateError;
@@ -8,11 +6,6 @@ use crate::paths::{home_dir, plugin_config_dir};
 pub const DEFAULT_CAMPAIGNS_DIR: &str = "campaigns";
 pub const DEFAULT_AGENT_KIND: &str = "claude";
 
-/// `estates.toml` in herdr's config dir for this plugin
-/// (`paths::plugin_config_dir`), the same file whether herdr or a shell
-/// runs this. When that file isn't there but `legacy_config_path` is,
-/// the legacy file is read instead; with neither, herdr's path is the
-/// one a missing-table error names.
 pub fn config_path() -> PathBuf {
     let herdrs = plugin_config_dir().join("estates.toml");
     if herdrs.is_file() {
@@ -25,9 +18,6 @@ pub fn config_path() -> PathBuf {
     herdrs
 }
 
-/// `~/.config/herdr-estate/estates.toml`, where a shell run looked
-/// before it mirrored herdr's config dir, and where the picker fell back
-/// to. Still read, after herdr's, so a table kept there keeps working.
 fn legacy_config_path() -> PathBuf {
     home_dir()
         .join(".config")
@@ -35,9 +25,6 @@ fn legacy_config_path() -> PathBuf {
         .join("estates.toml")
 }
 
-/// `{estate_name: estate_row}` from estates.toml's `[estate.*]` tables.
-/// `path` overrides `config_path()` — used by tests and by a caller that
-/// already resolved a path.
 pub fn load_estates(path: Option<&Path>) -> Result<toml::Table, EstateError> {
     let p = match path {
         Some(p) => p.to_path_buf(),
@@ -64,8 +51,6 @@ pub fn load_estates(path: Option<&Path>) -> Result<toml::Table, EstateError> {
     }
 }
 
-/// Split `estate/campaign` on the FIRST `/`; anything after further
-/// slashes stays part of the campaign name.
 pub fn parse_address(address: &str) -> Result<(String, String), EstateError> {
     match address.split_once('/') {
         Some((estate, campaign)) if !estate.is_empty() && !campaign.is_empty() => {
@@ -160,7 +145,6 @@ GREETING = "hi"
         assert_eq!(config_path(), p);
     }
 
-    /// Write the estate table at `home`'s legacy path and return it.
     fn write_legacy(home: &Path) -> PathBuf {
         let p = home
             .join(".config")
@@ -173,9 +157,6 @@ GREETING = "hi"
 
     #[test]
     fn a_legacy_table_is_read_when_herdrs_config_dir_has_none() {
-        // The picker on a machine whose table predates this: herdr
-        // hands an empty config dir, and the table at the old path
-        // keeps working.
         let d = TempDir::new();
         let home = TempDir::new();
         let legacy = write_legacy(home.path());

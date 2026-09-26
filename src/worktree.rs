@@ -1,12 +1,3 @@
-//! Optional worktrees.
-//!
-//! `ensure_worktree` is idempotent and additive only. It shells out to
-//! plain git, never `herdr worktree` — that family takes no `--env`, so
-//! the address could never reach the agent, and it registers a stray
-//! base workspace. It never removes a worktree either: herdr's own
-//! `worktree remove --force` can delete uncommitted work, and removal
-//! stays a human act.
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -18,9 +9,6 @@ struct GitOutput {
     stdout: String,
 }
 
-/// Run `git -C <repo> <args>` without checking the exit code, for probes
-/// where a non-zero exit is an ordinary "no" (a missing ref, an unset
-/// upstream), not a failure.
 fn run_git(repo: &Path, args: &[&str]) -> Result<GitOutput, EstateError> {
     let output = Command::new("git")
         .arg("-C")
@@ -40,7 +28,6 @@ fn run_git(repo: &Path, args: &[&str]) -> Result<GitOutput, EstateError> {
     })
 }
 
-/// The `check=True` half: a non-zero exit is a real failure here.
 fn git_checked(repo: &Path, args: &[&str]) -> Result<GitOutput, EstateError> {
     let out = run_git(repo, args)?;
     if !out.ok {
@@ -67,10 +54,6 @@ fn default_branch(repo: &Path) -> Result<String, EstateError> {
     Ok("main".to_string())
 }
 
-/// A path from `git worktree list --porcelain` whose branch matches, or
-/// `None`. Porcelain output is blank-line-separated blocks, each starting
-/// with `worktree <path>`, followed by a `branch refs/heads/<name>` line
-/// for a normal (non-detached) worktree.
 fn existing_worktree(repo: &Path, branch: &str) -> Result<Option<String>, EstateError> {
     let out = git_checked(repo, &["worktree", "list", "--porcelain"])?;
     let mut path: Option<String> = None;
@@ -101,10 +84,6 @@ fn wt_dir_for(repo: &Path, branch: &str) -> PathBuf {
         .join(branch.replace('/', "-"))
 }
 
-/// The read-only half of `ensure_worktree`: validates the repo exists and
-/// returns the path a real run would use, without running
-/// `git worktree add`, `worktree prune`, or creating a branch — so
-/// `--dry-run` can print it without mutating the repo.
 pub fn would_ensure_worktree(repo_path: &str, branch: &str) -> Result<PathBuf, EstateError> {
     let repo = expand(repo_path);
     if !repo.is_dir() {
@@ -119,9 +98,6 @@ pub fn would_ensure_worktree(repo_path: &str, branch: &str) -> Result<PathBuf, E
     Ok(wt_dir_for(&repo, branch))
 }
 
-/// Idempotent: `git worktree add` only when `branch`'s worktree isn't
-/// already registered. A new branch is cut from the remote default
-/// branch when one exists, else from HEAD. Never removes a worktree.
 pub fn ensure_worktree(repo_path: &str, branch: &str) -> Result<PathBuf, EstateError> {
     let repo = expand(repo_path);
     if !repo.is_dir() {
@@ -155,9 +131,7 @@ pub fn ensure_worktree(repo_path: &str, branch: &str) -> Result<PathBuf, EstateE
             git_checked(&repo, &["worktree", "add", &wt_str, "-b", branch])?;
         }
     }
-    // git may register the worktree under its realpath (e.g. resolving a
-    // symlinked temp dir): read the path back from git itself so a later
-    // idempotent call returns the identical value.
+    // git may register the worktree under its realpath: read it back.
     Ok(existing_worktree(&repo, branch)?
         .map(PathBuf::from)
         .unwrap_or(wt_dir))
@@ -208,14 +182,6 @@ mod tests {
 
     #[test]
     fn new_branch_is_cut_from_the_real_origin_default_not_main() {
-        // Every other test's repo has no `origin` remote, so
-        // `default_branch`'s `symbolic-ref refs/remotes/origin/HEAD`
-        // always misses and falls back to the literal "main". Here the
-        // remote's default branch is "trunk", named "main" nowhere, and
-        // the local checkout's *current* branch (a local-only "main",
-        // diverged from trunk) carries content trunk never had — so a
-        // new worktree branched from the wrong base would carry the
-        // wrong marker file.
         let tmp = TempDir::new();
         let run = |dir: &Path, args: &[&str]| {
             let status = Command::new("git")
@@ -249,8 +215,6 @@ mod tests {
             tmp.path(),
             &["clone", bare.to_str().unwrap(), repo.to_str().unwrap()],
         );
-        // A local-only branch, diverged from trunk, left checked out —
-        // the wrong base if `default_branch` fell back to its name.
         run(&repo, &["checkout", "-b", "main"]);
         run(&repo, &["config", "user.email", "test@example.com"]);
         run(&repo, &["config", "user.name", "Test"]);

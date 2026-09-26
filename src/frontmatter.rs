@@ -1,26 +1,11 @@
-//! A minimal, tolerant reader for campaign.md's YAML frontmatter.
-//!
-//! Not a YAML parser: it understands exactly the three shapes a campaign
-//! file uses: a top-level scalar (`agent: claude`), a list (flow
-//! `paths: [a, b]` or block `paths:` / `  - a`), and one level of nested
-//! table for a per-kind flag block (`claude:` / `  remote-control: true`).
-//! Unknown top-level keys are kept, not rejected, so an older or newer
-//! campaign file, or a key some other tool reads, never breaks the parse.
-
 use std::collections::BTreeMap;
 
-/// A scalar leaf value: either a boolean literal (`true`/`false`) or, for
-/// anything else, the string as written (comment-stripped, quote-stripped).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Scalar {
     Bool(bool),
     Str(String),
 }
 
-/// A frontmatter value: a bare scalar, a list of strings, or a one-level
-/// table of scalars. An empty `key:` with nothing under it parses as an
-/// empty table, and becomes a list only once a `- item` line under it
-/// is seen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     Scalar(Scalar),
@@ -58,7 +43,6 @@ enum Mode {
     Table,
 }
 
-/// Drop a trailing ` # comment` and surrounding matching quotes.
 fn strip_value(v: &str) -> String {
     let t = comment_trim(v);
     strip_quotes(&t)
@@ -90,9 +74,6 @@ fn scalar(v: &str) -> Scalar {
     }
 }
 
-/// A column-0 `key: rest` line. Requires the key to start with a letter
-/// or underscore; returns the raw (un-stripped) remainder after the
-/// colon and any immediately following whitespace.
 fn match_top(line: &str) -> Option<(&str, &str)> {
     let bytes = line.as_bytes();
     if bytes.is_empty() {
@@ -118,9 +99,6 @@ fn match_top(line: &str) -> Option<(&str, &str)> {
     Some((key, &line[j..]))
 }
 
-/// An indented `- item` line. Requires at least one leading whitespace
-/// char, a `-`, then at least one more whitespace char; returns the raw
-/// remainder.
 fn match_list_item(line: &str) -> Option<&str> {
     let bytes = line.as_bytes();
     let mut i = 0;
@@ -141,9 +119,6 @@ fn match_list_item(line: &str) -> Option<&str> {
     Some(&line[i..])
 }
 
-/// An indented `key: rest` line inside a table block. Same key alphabet
-/// as `match_top` (word chars and `-`), but no restriction on the first
-/// character.
 fn match_table_item(line: &str) -> Option<(&str, &str)> {
     let bytes = line.as_bytes();
     let mut i = 0;
@@ -239,10 +214,6 @@ pub fn parse_frontmatter(text: &str) -> BTreeMap<String, Value> {
     data
 }
 
-/// A campaign's one-line purpose, for the picker's brief column: the
-/// first non-blank line after the frontmatter that is not a heading,
-/// with `**` and backticks stripped. Empty when there is none, including
-/// when the frontmatter never closes.
 pub fn brief(text: &str) -> String {
     let mut lines = text.lines().peekable();
     if lines.next_if(|l| l.trim() == "---").is_some() {
@@ -309,16 +280,9 @@ mod tests {
 
     #[test]
     fn single_char_value_is_left_alone() {
-        // Below strip_quotes's len>=2 guard, so it must not touch the
-        // byte, let alone index past it.
         let d = parse_frontmatter("---\nagent: x\n---\n");
         assert_eq!(s(&d["agent"]), "x");
     }
-
-    // --- match_top / match_list_item / match_table_item: line-end and
-    // single-char-line boundaries, tested directly against the private
-    // matchers so an off-by-one at the end of a line panics loudly in
-    // the test rather than silently reading as "no match".
 
     #[test]
     fn match_top_colon_is_the_last_byte() {
@@ -342,8 +306,6 @@ mod tests {
 
     #[test]
     fn match_list_item_dash_is_the_last_byte() {
-        // One char of indent, a dash, and nothing after it: no
-        // separator whitespace, so not a valid item.
         assert_eq!(match_list_item(" -"), None);
     }
 
@@ -354,8 +316,6 @@ mod tests {
 
     #[test]
     fn frontmatter_text_ending_exactly_at_a_keys_colon() {
-        // The whole document ends at the colon, not just the line: no
-        // trailing newline, nothing after it at all.
         let d = parse_frontmatter("---\nworktree:");
         let t = d["worktree"].as_table().unwrap();
         assert!(t.is_empty());
@@ -406,10 +366,6 @@ mod tests {
 
     #[test]
     fn mixed_shape_under_one_key_after_first_choice_is_dropped() {
-        // The first indented line under a key decides whether it becomes
-        // a list or a table; a later line of the OTHER shape under the
-        // same key is silently dropped rather than erroring, matching
-        // the source grammar's tolerance for stray lines.
         let d = parse_frontmatter("---\nclaude:\n  remote-control: true\n  - stray\n---\n");
         let t = d["claude"].as_table().unwrap();
         assert_eq!(t.len(), 1);

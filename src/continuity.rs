@@ -1,10 +1,3 @@
-//! sessions.log: the continuity record a campaign's resume reads.
-//!
-//! One line per conversation: an ISO-8601 UTC timestamp, the hostname
-//! that opened it, and the conversation id, space-separated. Keep this
-//! format stable: existing campaign directories depend on it.
-//! herdr-estate owns continuity itself; herdr's own resume is never used.
-
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -33,19 +26,16 @@ pub fn latest_conversation(campaign_dir: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Civil (year, month, day) from a day count since the Unix epoch. A
-/// well-known constant-time algorithm (Howard Hinnant's `civil_from_days`),
-/// proleptic Gregorian, valid for every day this process will ever see.
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u64; // [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
     let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-    let mp = (5 * doy + 2) / 153; // [0, 11]
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
 }
@@ -65,16 +55,10 @@ pub(crate) fn now_utc_iso() -> String {
     format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}.{micros:06}+00:00")
 }
 
-/// The local hostname, via the `hostname` command — std has no
-/// dependency-free `gethostname(2)` wrapper, and a `hostname`/`libc`
-/// crate is outside this crate's dependency budget. Falls back to
-/// `"unknown"` rather than failing continuity over a missing binary.
 fn hostname() -> String {
     hostname_from("hostname")
 }
 
-/// `hostname` with the command to run as a parameter, so a test can
-/// point it at a fake instead of the machine's own.
 fn hostname_from(command: &str) -> String {
     std::process::Command::new(command)
         .output()
@@ -100,10 +84,6 @@ mod tests {
     use super::*;
     use crate::test_support::TempDir;
 
-    // A line in the SAME FORMAT an existing estate continuity log already
-    // writes — timestamp, hostname, conversation id, space-separated —
-    // copied for its shape only, not its content, so a pre-existing
-    // sessions.log keeps resuming its latest conversation unmodified.
     const FIXTURE_LINE: &str =
         "2026-08-11T14:02:07.335219+00:00 example-host 3f9c2b7e-11aa-42bb-9cde-0123456789ab\n";
 
@@ -151,7 +131,6 @@ mod tests {
         let fixture_fields: Vec<&str> = FIXTURE_LINE.split_whitespace().collect();
         let written_fields: Vec<&str> = written.split_whitespace().collect();
         assert_eq!(written_fields.len(), fixture_fields.len());
-        // field 0: ISO-8601 timestamp
         let ts = written_fields[0];
         assert!(ts.len() >= 19, "timestamp too short: {ts}");
         assert_eq!(&ts[4..5], "-");
@@ -159,26 +138,18 @@ mod tests {
         assert_eq!(&ts[10..11], "T");
         assert_eq!(&ts[13..14], ":");
         assert_eq!(&ts[16..17], ":");
-        // field 2: the conversation id, verbatim
         assert_eq!(written_fields[2], "new-sid");
     }
 
     #[test]
     fn civil_from_days_epoch_and_known_dates() {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
-        // 2026-09-21 is 20717 days after the epoch.
         assert_eq!(civil_from_days(20717), (2026, 9, 21));
         assert_eq!(civil_from_days(-1), (1969, 12, 31));
     }
 
     #[test]
     fn civil_from_days_across_century_and_leap_year_boundaries() {
-        // (days since epoch, year, month, day), independently computed —
-        // spans non-leap century years (1700/1800/1900/2100, not
-        // divisible by 400), leap century years (1600/2000/2400, divisible
-        // by 400), ordinary leap years, and the epoch and year-1 corners.
-        // Operator-swap mutations in the arithmetic above (-/+/*// on any
-        // one line) miss at least one of these.
         const CASES: &[(i64, i64, u32, u32)] = &[
             (-135140, 1600, 1, 1),
             (-135081, 1600, 2, 29),
@@ -237,7 +208,6 @@ mod tests {
         }
     }
 
-    /// An executable at `dir/name` running `body` under `/bin/sh`.
     fn fake_command(dir: &Path, name: &str, body: &str) -> String {
         use std::os::unix::fs::PermissionsExt;
         let path = dir.join(name);

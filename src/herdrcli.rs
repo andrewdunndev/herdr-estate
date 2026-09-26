@@ -1,12 +1,3 @@
-//! The one seam between this crate and the herdr CLI itself.
-//!
-//! Every herdr invocation anywhere in this crate goes through
-//! `call_herdr`, but one: `call_api` sends the single request the CLI
-//! can't express straight to herdr's socket. Tests point `HERDR_BIN_PATH`
-//! at a fake executable (`crate::test_support::FakeHerdr`), and
-//! `HERDR_SOCKET_PATH` at a listener of their own, and never run a real
-//! herdr binary.
-
 use std::collections::BTreeMap;
 use std::process::Command;
 
@@ -15,12 +6,6 @@ use serde::Deserialize;
 use crate::errors::EstateError;
 use crate::paths::non_empty_env;
 
-/// Dropped from the environment of every herdr call: a stale API key (the
-/// session should authenticate via the parent shell's own login) and
-/// TMUX*/CLAUDE* markers that describe *this* process, not the workspace
-/// herdr is about to create. Nothing under HERDR_* matches either rule, so
-/// the control socket and the rest of herdr's own plugin env ride through
-/// untouched.
 const ENV_SCRUB_EXACT: &[&str] = &["ANTHROPIC_API_KEY"];
 const ENV_SCRUB_PREFIX: &[&str] = &["TMUX", "CLAUDE"];
 
@@ -34,15 +19,8 @@ pub fn scrub_env(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// What a masked `--env` value reads as, in a `--dry-run` plan and in a
-/// failed call's message alike.
 pub(crate) const ENV_VALUE_MASK: &str = "<from estates.toml>";
 
-/// `args` for display, with the value of every `--env KEY=VALUE` masked.
-/// A failed `workspace create` carries the estate's env values in its
-/// argv, and this message reaches stderr, the popup and events.log. Empty
-/// values (the scrub entries) and `HERDR_ESTATE_ADDRESS`, which is
-/// derived rather than configured, stay in the clear.
 fn redacted_args(args: &[String]) -> Vec<String> {
     let mut out = Vec::with_capacity(args.len());
     let mut after_env = false;
@@ -58,9 +36,6 @@ fn redacted_args(args: &[String]) -> Vec<String> {
     out
 }
 
-/// The `EstateError::Protocol` message for a non-zero herdr exit on
-/// `call_herdr(check: true)`: the redacted argv, then stderr if any, else
-/// stdout, trimmed to 300 chars.
 fn failure_message(herdr_args: &[String], stderr: &str, stdout: &str) -> String {
     let raw: &str = if !stderr.is_empty() {
         stderr
@@ -76,9 +51,6 @@ fn failure_message(herdr_args: &[String], stderr: &str, stdout: &str) -> String 
     )
 }
 
-/// `agent_status` off a `workspace list`/`workspace get` row. Fails
-/// closed: `is_alive` below treats everything except exactly `Unknown`
-/// as alive, including any value not accounted for here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentStatus {
     Working,
@@ -98,8 +70,6 @@ impl<'de> Deserialize<'de> for AgentStatus {
 }
 
 impl AgentStatus {
-    /// The variant for herdr's wire value `s`; anything unrecognized is
-    /// kept as `Other`.
     pub fn from_wire(s: &str) -> AgentStatus {
         match s {
             "working" => AgentStatus::Working,
@@ -110,8 +80,6 @@ impl AgentStatus {
         }
     }
 
-    /// The wire value this variant round-trips from, for display (the
-    /// picker's row list shows this next to a live campaign).
     pub fn as_str(&self) -> &str {
         match self {
             AgentStatus::Working => "working",
@@ -123,21 +91,6 @@ impl AgentStatus {
     }
 }
 
-/// One row of `workspace list`'s `workspaces` array. `workspace_id` and
-/// `label` are exactly the fields the ownership and alive guards depend
-/// on, so neither carries `#[serde(default)]`: a row herdr sent without
-/// one fails the whole listing (`EstateError::Protocol`) rather than
-/// silently dropping out of the guard's view the way a `.get()` default
-/// would. `agent_status` is the one field known to count as alive when
-/// absent, so its `Option` carries the default instead —
-/// `Option`'s own `Deserialize` treats a missing key and an explicit
-/// `null` the same way, matching both cases in one rule. `pane_count`
-/// is herdr's own count of panes in the workspace: `agent_status` is a
-/// single aggregate across every one of them (herdr ranks an idle,
-/// unseen pane above a working one), so a workspace closed on that
-/// status alone can still be tearing down a pane that is genuinely
-/// working. Its `Option` carries the same missing-key default, so a
-/// listing that omits it is not treated as a known single pane.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Workspace {
     pub workspace_id: String,
@@ -153,10 +106,6 @@ pub struct WorkspaceListResult {
     pub workspaces: Vec<Workspace>,
 }
 
-/// `workspace get`'s envelope: tolerant, because a workspace herdr
-/// itself carries may have no label at all — an ordinary condition
-/// callers translate into their own error (`EstateError::Usage`, a
-/// skipped close), never `EstateError::Protocol` on its own.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct WorkspaceGetResult {
     #[serde(default)]
@@ -175,11 +124,6 @@ pub struct WorkspaceRef {
     pub pane_count: Option<usize>,
 }
 
-/// `workspace create`'s envelope. Both ids ARE guard-critical here —
-/// every later call in the verb addresses this exact workspace and pane
-/// — so the caller (`verbs::created_ids`) turns a missing one into its
-/// own `EstateError::Protocol`, naming the field, rather than this type
-/// failing to parse at all.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct WorkspaceCreateResult {
     #[serde(default)]
@@ -197,28 +141,13 @@ pub struct PaneRef {
 #[derive(Debug, Clone)]
 pub struct HerdrResult {
     pub ok: bool,
-    /// The `"result"` object of herdr's `{"result": ...}` envelope, or
-    /// the whole parsed payload when it carried no `"result"` key.
-    /// Always a JSON object — empty when herdr's stdout was empty,
-    /// malformed, or shaped as something other than an object.
     pub data: serde_json::Value,
 }
 
-/// `$HERDR_BIN_PATH` when set to a non-empty value, else the bare name
-/// `herdr` for `Command` to resolve against `$PATH` — split out as its
-/// own pure function so the fallback is unit-testable without spawning
-/// anything (a plugin test must never spawn a real `herdr`).
 fn resolve_bin_path() -> String {
     non_empty_env("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".to_string())
 }
 
-/// Run `$HERDR_BIN_PATH <args>` (falling back to `herdr` on `$PATH`),
-/// scrubbing the child's environment, and parse its JSON envelope into
-/// `HerdrResult.data`.
-///
-/// `check: true` turns a non-zero herdr exit into an `Err`; pass `false`
-/// for a probe that reports failure as `HerdrResult.ok == false` instead
-/// (the label-match-before-close pattern needs this).
 pub fn call_herdr(args: &[String], check: bool) -> Result<HerdrResult, EstateError> {
     let bin_path = resolve_bin_path();
     let scrubbed = scrub_env(&std::env::vars().collect());
@@ -257,14 +186,6 @@ pub fn call_herdr(args: &[String], check: bool) -> Result<HerdrResult, EstateErr
     Ok(HerdrResult { ok, data })
 }
 
-/// One request straight to herdr's API socket, `$HERDR_SOCKET_PATH`
-/// (set in every pane and action herdr runs): a line of JSON out, one
-/// line back, shaped by herdr's bundled schema (`herdr api schema`).
-/// Only for what the CLI can't send, today a plugin action invoked with
-/// a context of this plugin's own; everything else goes through
-/// `call_herdr`. Returns the reply's `result`; a herdr `error`, an
-/// unreachable socket or a reply that isn't JSON is
-/// `EstateError::Protocol` naming `method`.
 pub fn call_api(method: &str, params: serde_json::Value) -> Result<serde_json::Value, EstateError> {
     use std::io::{BufRead, BufReader, Write};
     let failed = |why: String| EstateError::Protocol(format!("{method}: {why}"));
@@ -297,12 +218,6 @@ pub fn call_api(method: &str, params: serde_json::Value) -> Result<serde_json::V
     Err(failed(message.to_string()))
 }
 
-/// Every workspace herdr currently has open, via `workspace list`. A
-/// non-zero exit (`call_herdr`'s `check: true`) or a response that
-/// doesn't parse into a `workspaces` array both return
-/// `EstateError::Protocol` — callers (the ownership/alive guards, the
-/// picker's row list) must never treat that as "no workspaces" and
-/// carry on over a half-true read.
 pub fn workspace_list() -> Result<Vec<Workspace>, EstateError> {
     let result = call_herdr(&["workspace".to_string(), "list".to_string()], true)?;
     let list: WorkspaceListResult = serde_json::from_value(result.data).map_err(|_| {
@@ -483,8 +398,6 @@ mod tests {
 
     #[test]
     fn redaction_touches_only_the_argument_after_an_env_flag() {
-        // An `=` in any other argument (a path, an agent flag) is not an
-        // env pair and stays as it is.
         assert_eq!(
             redacted_args(&args(&[
                 "--cwd",
@@ -527,9 +440,6 @@ mod tests {
 
     #[test]
     fn call_herdr_check_false_failure_with_json_stdout_still_yields_empty_data() {
-        // A non-zero exit means the JSON on stdout, if any, describes an
-        // error — never parsed into `data`, whether or not it happens to
-        // be well-formed.
         let fake = FakeHerdr::new();
         fake.set_response(0, r#"{"result": {"workspace": {"label": "x"}}}"#, 1);
         let _g = EnvGuard::set(&[(

@@ -1,26 +1,8 @@
 // Portions adapted from herdr v0.9.1 (github.com/herdrdev/herdr, tag
-// 8544776, Apache-2.0, see /LICENSE-APACHE-HERDR;
-// Catppuccin palettes MIT): palettes from src/app/state.rs:78-525;
-// canonical() and parse_color() from src/config/theme.rs:25-47,155-219
-// (changed: .get() slicing); resolution from src/app/mod.rs:219-332.
-// herdr's parser: toml 0.8.23. Bump: when herdr's version changes, list
-// the commits since the tag touching state.rs, config/theme.rs,
-// app/mod.rs, client/shell/composition.rs, client/shell/overlays.rs and
-// client/shell.rs (gh api
-// 'repos/herdrdev/herdr/commits?sha=<new tag>&path=<file>&since=<old tag date>').
-// If there are none, bump the tag.
-
-//! herdr's look, copied: the colour tokens the picker paints with and
-//! the status glyph set, resolved from herdr's own config file the way
-//! herdr resolves them. herdr 0.9.1 gives a plugin no theme: no
-//! environment variable, socket method or plugin-context field carries
-//! one (#1796 is an open idea; revisit if it ships). So all 18 built-in
-//! palettes are copied from herdr's source, each cut to the 11 tokens
-//! the picker paints, and herdr's resolution is replayed over the file
-//! herdr itself reads: the theme name, `[theme.custom]`, the legacy
-//! `[ui].accent`, and `auto_switch` as herdr resolves it when it can't
-//! tell the terminal's appearance. Only a fill equal to herdr's resolved
-//! `panel_bg` makes the picker and herdr's popup frame one surface.
+// 8544776, Apache-2.0, see /LICENSE-APACHE-HERDR; Catppuccin palettes
+// MIT): palettes from src/app/state.rs:78-525; canonical() and
+// parse_color() from src/config/theme.rs:25-47,155-219 (changed: .get()
+// slicing); resolution from src/app/mod.rs:219-332.
 
 use std::path::PathBuf;
 
@@ -28,38 +10,21 @@ use ratatui::style::Color;
 
 use crate::picker::core::{Indicators, Status};
 
-/// The herdr colour tokens the picker uses, by herdr's own names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Palette {
-    /// Every cell's background, the same as herdr's popup frame.
     pub panel_bg: Color,
-    /// The query and a live row's address.
     pub text: Color,
-    /// A dormant or new row's address.
     pub subtext0: Color,
-    /// Hints, the count, meta and empty states.
     pub overlay0: Color,
-    /// The rule under the filter line.
     pub surface1: Color,
-    /// The selection bar; herdr's popup border is drawn in it too.
     pub accent: Color,
-    /// Text on the selection bar when `panel_bg` names no colour.
     pub surface_dim: Color,
-    /// Status: working.
     pub yellow: Color,
-    /// Status: blocked.
     pub red: Color,
-    /// Status: done.
     pub teal: Color,
-    /// Status: idle.
     pub green: Color,
 }
 
-/// Each RGB built-in theme by canonical name, its tokens in `Palette`'s
-/// field order: panel_bg, text, subtext0, overlay0, surface1, accent,
-/// surface_dim, yellow, red, teal, green (app/state.rs:78-525). Generated
-/// from a table checked against herdr's source, never typed by hand.
-/// `terminal`, the one theme of ANSI names, is `Palette::terminal`.
 #[rustfmt::skip]
 const THEMES: [(&str, [u32; 11]); 17] = [
     ("catppuccin", [0x181825, 0xcdd6f4, 0xa6adc8, 0x6c7086, 0x45475a, 0x89b4fa, 0x1e1e2e, 0xf9e2af, 0xf38ba8, 0x94e2d5, 0xa6e3a1]),
@@ -81,12 +46,10 @@ const THEMES: [(&str, [u32; 11]); 17] = [
     ("vesper", [0x1a1a1a, 0xffffff, 0xa0a0a0, 0x5c5c5c, 0x282828, 0xffc799, 0x101010, 0xffc799, 0xff8080, 0x66ddcc, 0x99ffe4]),
 ];
 
-/// `0xrrggbb` as a colour.
 const fn rgb(x: u32) -> Color {
     Color::Rgb((x >> 16) as u8, (x >> 8) as u8, x as u8)
 }
 
-/// A `THEMES` row as a palette.
 fn from_row(row: [u32; 11]) -> Palette {
     let [panel_bg, text, subtext0, overlay0, surface1, accent, surface_dim, yellow, red, teal, green] =
         row.map(rgb);
@@ -106,14 +69,10 @@ fn from_row(row: [u32; 11]) -> Palette {
 }
 
 impl Palette {
-    /// Catppuccin Mocha, herdr's default theme and its fallback for a
-    /// name it doesn't know: the table's first row.
     pub fn catppuccin() -> Self {
         from_row(THEMES[0].1)
     }
 
-    /// herdr's 16-colour `terminal` theme (app/state.rs:128-150), which
-    /// follows whatever palette the terminal itself has.
     pub fn terminal() -> Self {
         Palette {
             panel_bg: Color::Reset,
@@ -130,10 +89,6 @@ impl Palette {
         }
     }
 
-    /// herdr's `contrast()` (overlays.rs:296-301): text on the accent bar
-    /// is `panel_bg`, or `surface_dim` when `panel_bg` is the terminal's
-    /// own background and so names no colour. A method, not a stored
-    /// token, so it follows a `[theme.custom]` override of either.
     pub fn contrast(&self) -> Color {
         match self.panel_bg {
             Color::Reset => self.surface_dim,
@@ -141,7 +96,6 @@ impl Palette {
         }
     }
 
-    /// herdr's `status_color` (client/shell.rs:224-236).
     pub fn status(&self, status: Status) -> Color {
         match status {
             Status::Working => self.yellow,
@@ -152,11 +106,6 @@ impl Palette {
         }
     }
 
-    /// Set each painted token `t` gives a string to that string's colour,
-    /// as herdr's `with_overrides` and `with_mode_overrides` do
-    /// (app/state.rs:553-675). Everything else in `t` is ignored: herdr's
-    /// other 8 tokens, sub-tables, typos, and a value that isn't a string
-    /// (which at startup makes herdr drop its whole config instead).
     fn apply(&mut self, t: &toml::Table) {
         let tokens = [
             ("panel_bg", &mut self.panel_bg),
@@ -179,10 +128,6 @@ impl Palette {
     }
 }
 
-/// A theme name as herdr canonicalizes it (`canonical_theme_name`,
-/// config/theme.rs:25-47): lowercased, spaces and underscores as '-',
-/// aliases folded. `None` for a name herdr doesn't know, which herdr
-/// itself shows as catppuccin.
 fn canonical(name: &str) -> Option<&'static str> {
     match name.to_lowercase().replace([' ', '_'], "-").as_str() {
         "catppuccin" | "catppuccin-mocha" => Some("catppuccin"),
@@ -207,9 +152,6 @@ fn canonical(name: &str) -> Option<&'static str> {
     }
 }
 
-/// The built-in theme a name picks under any spelling herdr accepts
-/// (`Palette::from_name`, app/state.rs:528-550). `None` for a name herdr
-/// doesn't know.
 fn builtin(name: &str) -> Option<Palette> {
     match canonical(name)? {
         "terminal" => Some(Palette::terminal()),
@@ -220,14 +162,6 @@ fn builtin(name: &str) -> Option<Palette> {
     }
 }
 
-/// A colour string as herdr parses it (`parse_color`,
-/// config/theme.rs:155-219), making herdr's own calls so its quirks
-/// carry over: trimmed and lowercased; reset, default, none and
-/// transparent are the terminal's own colour; `#rrggbb` and `#rgb` by
-/// byte length through `u8::from_str_radix`, which takes a leading '+';
-/// `rgb(r, g, b)`; the 16 ANSI names plus purple, grey and darkgrey;
-/// anything else cyan. The one change: `get` where herdr slices, so a
-/// character split at a slice boundary gives cyan where herdr panics.
 fn parse_color(s: &str) -> Color {
     let s = s.trim().to_lowercase();
 
@@ -275,8 +209,6 @@ fn parse_color(s: &str) -> Color {
         "yellow" => Color::Yellow,
         "blue" => Color::Blue,
         "magenta" | "purple" => Color::Magenta,
-        // The fallback's colour too, so a mutant deleting this arm
-        // survives; kept so the arms match herdr's one for one.
         "cyan" => Color::Cyan,
         "white" => Color::White,
         "gray" | "grey" => Color::Gray,
@@ -291,8 +223,6 @@ fn parse_color(s: &str) -> Color {
     }
 }
 
-/// herdr's light/dark theme pairs, dark first (`sibling_theme_names`,
-/// app/mod.rs:219-244).
 const SIBLINGS: [(&str, &str); 7] = [
     ("catppuccin", "catppuccin-latte"),
     ("tokyo-night", "tokyo-night-day"),
@@ -303,10 +233,6 @@ const SIBLINGS: [(&str, &str); 7] = [
     ("rose-pine", "rose-pine-dawn"),
 ];
 
-/// The theme `auto_switch` shows on a dark terminal with no `dark_name`
-/// set: for the light half of a pair, under any spelling herdr accepts,
-/// its dark half; for any other name, the name itself, which already
-/// names a dark half or a theme with no pair.
 fn dark_partner(name: &str) -> &str {
     let c = canonical(name);
     SIBLINGS
@@ -315,16 +241,6 @@ fn dark_partner(name: &str) -> &str {
         .map_or(name, |(dark, _)| dark)
 }
 
-/// The palette and glyph set a parsed herdr config gives the picker,
-/// resolved as herdr resolves them (app/mod.rs:246-332). The theme is
-/// `[theme].name` (catppuccin when unset); with `auto_switch` on it is
-/// `dark_name`, else that name's dark partner, since the picker can't
-/// yet ask the terminal its appearance and herdr takes an unknown one as
-/// dark. Then, in herdr's order: the built-in theme (catppuccin for a
-/// name herdr doesn't know), `[theme.custom]`, the legacy `[ui].accent`
-/// unless it is "cyan" or `[theme.custom]` sets an accent, and, under
-/// `auto_switch`, `[theme.custom.dark]`. A value of the wrong type is
-/// skipped here, where herdr would drop its whole config at startup.
 pub fn resolve(cfg: Option<&toml::Table>) -> (Palette, Indicators) {
     fn get<'a>(t: Option<&'a toml::Table>, key: &str) -> Option<&'a toml::Value> {
         t?.get(key)
@@ -364,17 +280,8 @@ pub fn resolve(cfg: Option<&toml::Table>) -> (Palette, Indicators) {
     (palette, indicators)
 }
 
-/// The config file herdr reads, found the way herdr finds it
-/// (config.rs:56; config/io.rs:30-35, 62-68, 195-200):
-/// `$HERDR_CONFIG_PATH`, else `$XDG_CONFIG_HOME/herdr/config.toml`, else
-/// `$HOME/.config/herdr/config.toml`, else `herdr/config.toml` in the
-/// temp dir. A variable counts as set whenever `env::var` reads it, even
-/// empty, since that is herdr's `is_ok()` test: an empty
-/// `HERDR_CONFIG_PATH` makes herdr read the path "" and fall back to its
-/// defaults, not move on to the next place. Everywhere else this crate
-/// treats an empty variable as unset (`paths::non_empty_env`), but here
-/// the only file worth reading is the one herdr itself reads.
 fn config_path() -> PathBuf {
+    // herdr treats an empty HERDR_CONFIG_PATH as set, so this does too.
     if let Ok(path) = std::env::var("HERDR_CONFIG_PATH") {
         return PathBuf::from(path);
     }
@@ -386,9 +293,6 @@ fn config_path() -> PathBuf {
     dir.join("herdr").join("config.toml")
 }
 
-/// Read herdr's config and resolve it. A missing or unparseable file
-/// gives herdr's own defaults, catppuccin and dots (config/io.rs:172-178),
-/// so the picker never fails to open over its look.
 pub fn load() -> (Palette, Indicators) {
     let cfg = std::fs::read_to_string(config_path())
         .ok()
@@ -419,7 +323,6 @@ mod tests {
         assert_eq!(c.surface1, Color::Rgb(0x45, 0x47, 0x5a));
         assert_eq!(c.accent, Color::Rgb(0x89, 0xb4, 0xfa));
         assert_eq!(c.surface_dim, Color::Rgb(0x1e, 0x1e, 0x2e));
-        // panel_bg names a colour, so the bar's text is panel_bg.
         assert_eq!(c.contrast(), Color::Rgb(0x18, 0x18, 0x25));
         assert_eq!(c.yellow, Color::Rgb(0xf9, 0xe2, 0xaf));
         assert_eq!(c.red, Color::Rgb(0xf3, 0x8b, 0xa8));
@@ -434,7 +337,6 @@ mod tests {
         assert_eq!(t.surface1, Color::DarkGray);
         assert_eq!(t.accent, Color::Blue);
         assert_eq!(t.surface_dim, Color::DarkGray);
-        // panel_bg is Reset, so the bar's text falls to surface_dim.
         assert_eq!(t.contrast(), Color::DarkGray);
         assert_eq!(t.yellow, Color::Yellow);
         assert_eq!(t.red, Color::LightRed);
@@ -444,10 +346,6 @@ mod tests {
 
     #[test]
     fn vesper_and_latte_are_herdrs_tokens() {
-        // Spelled as herdr's source spells them (app/state.rs:503-525,
-        // 103-125), generated from its token dump rather than from the
-        // table, so a row typed wrong fails here. vesper is the
-        // operator's theme.
         let vesper = builtin("vesper").unwrap();
         assert_eq!(
             vesper,
@@ -532,9 +430,6 @@ mod tests {
             ("dawn", "rose-pine-dawn"),
             ("vesper", "vesper"),
         ];
-        // Every spelling also resolves to a built-in palette: the table
-        // has a row, under its canonical name, for each theme canonical()
-        // can name, so no name list needs testing apart from this one.
         for (name, want) in table {
             assert_eq!(canonical(name), Some(want), "{name:?}");
             assert!(builtin(name).is_some(), "{name:?}");
@@ -556,14 +451,9 @@ mod tests {
             "",
             "[theme]\n",
             "[theme]\nname = \"Catppuccin Mocha\"\n",
-            // herdr falls back to catppuccin for a name it doesn't know.
             "[theme]\nname = \"nrod\"\n",
             "[theme]\nauto_switch = false\n",
-            // cyan is the legacy accent's default: no override.
             "[ui]\naccent = \"cyan\"\n",
-            // Nothing painted to override: an empty table, a table
-            // herdr doesn't read, herdr's other tokens, a typo, a value
-            // that isn't a string, and a mode table without auto_switch.
             "[theme.custom]\n",
             "[theme.custom_x]\naccent = \"#f5c2e7\"\n",
             "[theme.custom]\nblue = \"#f5c2e7\"\nacent = \"#f5c2e7\"\ntext = 5\n",
@@ -604,11 +494,7 @@ mod tests {
         ] {
             assert_eq!(parse_color(name), want, "{name:?}");
         }
-        // u8::from_str_radix takes a leading '+', so herdr reads this.
         assert_eq!(parse_color("#+f+f+f"), Color::Rgb(15, 15, 15));
-        // Anything else is cyan: no indexed colours, a bad digit, the
-        // wrong count, a byte out of range, and six bytes whose first
-        // slice splits the 'é', where herdr itself panics.
         for bad in [
             "color5",
             "5",
@@ -630,9 +516,6 @@ mod tests {
             palette_for("[theme]\nname = \"nord\"\n[theme.custom]\naccent = \"#f5c2e7\"\n"),
             want
         );
-        // Each of the 11 keys, in table order, lands on its own token:
-        // the nth is #0000nn, as a table row of 1..=11 would be (the
-        // goldens hold from_row to herdr's field order).
         let keys =
             "panel_bg text subtext0 overlay0 surface1 accent surface_dim yellow red teal green";
         let mut text = String::from("[theme]\nname = \"nord\"\n[theme.custom]\n");
@@ -657,9 +540,7 @@ mod tests {
     fn the_legacy_ui_accent_applies_where_herdr_applies_it() {
         let accent = |text: &str| palette_for(text).accent;
         assert_eq!(accent("[ui]\naccent = \"magenta\"\n"), Color::Magenta);
-        // herdr's test against its default is case-sensitive.
         assert_eq!(accent("[ui]\naccent = \"Cyan\"\n"), Color::Cyan);
-        // A [theme.custom] accent turns it off.
         assert_eq!(
             accent("[theme.custom]\naccent = \"#010203\"\n[ui]\naccent = \"magenta\"\n"),
             Color::Rgb(1, 2, 3)
@@ -670,15 +551,11 @@ mod tests {
     fn auto_switch_shows_the_theme_herdr_shows_on_an_appearance_it_cant_tell() {
         let auto = |rest: &str| palette_for(&format!("[theme]\nauto_switch = true\n{rest}"));
         let theme = |name: &str| builtin(name).unwrap();
-        // Without auto_switch, the light theme named...
         assert_eq!(
             palette_for("[theme]\nname = \"tokyo-night-day\"\n"),
             theme("tokyo-night-day")
         );
-        // ...with it, herdr takes the terminal as dark: the pair's dark
-        // half...
         assert_eq!(auto("name = \"tokyo-night-day\"\n"), theme("tokyo-night"));
-        // ...unless dark_name names a theme, known or not.
         assert_eq!(
             auto("name = \"tokyo-night-day\"\ndark_name = \"nord\"\n"),
             theme("nord")
@@ -687,13 +564,11 @@ mod tests {
             auto("name = \"tokyo-night-day\"\ndark_name = \"nrod\"\n"),
             Palette::catppuccin()
         );
-        // A theme with no pair is its own dark half.
         assert_eq!(auto("name = \"vesper\"\n"), theme("vesper"));
     }
 
     #[test]
     fn under_auto_switch_theme_custom_dark_lands_last() {
-        // Over [theme.custom]...
         let p = palette_for(
             "[theme]\nauto_switch = true\n\
              [theme.custom]\ntext = \"#010101\"\naccent = \"#020202\"\n\
@@ -701,7 +576,6 @@ mod tests {
         );
         assert_eq!(p.text, Color::Rgb(1, 1, 1));
         assert_eq!(p.accent, Color::Rgb(3, 3, 3));
-        // ...and over the legacy accent.
         let p = palette_for(
             "[theme]\nauto_switch = true\n\
              [theme.custom.dark]\naccent = \"#030303\"\n\
@@ -722,7 +596,6 @@ mod tests {
             Indicators::Dots
         );
         assert_eq!(ind("[ui]\n"), Indicators::Dots);
-        // Symbols with no [theme]: herdr's default palette.
         assert_eq!(
             resolve(Some(&parse("[ui]\nstatus_indicators = \"symbols\"\n"))),
             (Palette::catppuccin(), Indicators::Symbols)
@@ -771,9 +644,6 @@ mod tests {
 
     #[test]
     fn an_empty_herdr_config_path_is_set_as_herdr_reads_it() {
-        // herdr reads the path "" (which fails, so its defaults), never
-        // the XDG file behind it, so the picker must not pick that
-        // file's symbols up either.
         let d = TempDir::new();
         std::fs::create_dir_all(d.path().join("herdr")).unwrap();
         std::fs::write(
@@ -791,8 +661,6 @@ mod tests {
 
     #[test]
     fn an_empty_xdg_config_home_is_set_as_herdr_reads_it() {
-        // herdr joins "" and reads the relative herdr/config.toml, never
-        // $HOME's file.
         let d = TempDir::new();
         let home_cfg = d.path().join(".config").join("herdr");
         std::fs::create_dir_all(&home_cfg).unwrap();

@@ -1,5 +1,3 @@
-//! bin/herdr-estate's argument parsing and dispatch.
-
 use crate::config;
 use crate::detach::{self, RowAction};
 use crate::dispatch;
@@ -8,13 +6,9 @@ use crate::picker;
 use crate::progress;
 use crate::verbs;
 
-/// What `--render-once` renders at with no `--width`/`--height`
-/// override: 80x20, a small terminal. The popup itself is sized by the
-/// manifest as a share of the window and redraws to whatever it gets.
 pub const PICK_DEFAULT_WIDTH: usize = 80;
 pub const PICK_DEFAULT_HEIGHT: usize = 20;
 
-/// What `--help` or `-h` prints.
 pub const USAGE: &str = "\
 usage: herdr-estate <verb> [options]
 
@@ -59,10 +53,6 @@ pub enum Command {
         width: usize,
         height: usize,
     },
-    /// `pick --dispatch <open|fresh|stop>`: a picker row's dispatch
-    /// with no picker, run by the manifest's `dispatch-*` actions when
-    /// the row's workspace is the popup's (`detach`). The address is
-    /// the invocation context's workspace label.
     PickDispatch {
         action: RowAction,
     },
@@ -73,11 +63,6 @@ pub struct ParseError {
     pub message: String,
 }
 
-/// A small hand-rolled parser: one required subcommand (`resume`,
-/// `fresh`, `list`, `create` or `pick`), an optional positional
-/// `address` and `--dry-run` on resume and fresh, create's required
-/// address, `--brief` and `--dry-run`, and pick's render flags or its
-/// `--dispatch <action>`. Anything else is a usage error, exit code 2.
 pub fn parse_args(argv: &[String]) -> Result<Command, ParseError> {
     let verb = argv.first().ok_or_else(|| ParseError {
         message: "the following arguments are required: verb".to_string(),
@@ -122,10 +107,6 @@ pub fn parse_args(argv: &[String]) -> Result<Command, ParseError> {
     }
 }
 
-/// `create <address> --brief <text> [--dry-run]`: the address and the
-/// brief are both required, and the address is never derived.
-/// `--brief` never takes a flag as its text, so a forgotten brief
-/// before `--dry-run` is a usage error, not a real write.
 fn parse_create(rest: &[String]) -> Result<Command, ParseError> {
     let mut address = None;
     let mut brief = None;
@@ -194,8 +175,6 @@ fn parse_pick(rest: &[String]) -> Result<Command, ParseError> {
     })
 }
 
-/// `--dispatch`'s action and nothing after it: the address comes from
-/// the invocation context herdr hands the action.
 fn parse_pick_dispatch(rest: &[String]) -> Result<Command, ParseError> {
     let [action] = rest else {
         return Err(ParseError {
@@ -219,10 +198,6 @@ fn parse_dimension(value: Option<&String>, flag: &str) -> Result<usize, ParseErr
     })
 }
 
-/// `address` when given; otherwise the label of the workspace
-/// `$HERDR_WORKSPACE_ID` names (a herdr call), unless `dry_run` is set,
-/// since a dry run must never itself call herdr just to find out what it
-/// would have printed.
 fn resolve_address(address: Option<String>, dry_run: bool) -> Result<String, EstateError> {
     if let Some(a) = address {
         return Ok(a);
@@ -283,8 +258,6 @@ fn dispatch(cmd: Command) -> Result<i32, EstateError> {
             width,
             height,
         } => {
-            // Checked before the estate table is read: the popup this
-            // opens runs `pick` again and reads it there.
             if picker::shell::opens_popup_instead_of_drawing(render_once) {
                 return picker::shell::open_popup();
             }
@@ -299,13 +272,7 @@ fn dispatch(cmd: Command) -> Result<i32, EstateError> {
     }
 }
 
-/// Parse `argv` (excluding the program name) and run the named verb,
-/// returning the process exit code: 0 on success, 1 on a handled
-/// `EstateError` (printed as `herdr-estate: <message>` to stderr), 2 on
-/// a usage error in the arguments themselves.
 pub fn run(argv: &[String]) -> i32 {
-    // Ahead of the log line below: a version check or a help request
-    // is not a run and writes nothing to events.log.
     if argv.first().map(String::as_str) == Some("--version")
         || argv.first().map(String::as_str) == Some("-V")
     {
@@ -316,10 +283,6 @@ pub fn run(argv: &[String]) -> i32 {
         print!("{USAGE}");
         return 0;
     }
-    // Every run opens with one log line naming its argv and how herdr
-    // started it: the same `pick` argv draws in the popup and, run as
-    // an action, opens that popup instead, and the log should say which
-    // one ran.
     progress::append(&format!(
         "run: herdr-estate {} ({})",
         argv.join(" "),
@@ -428,7 +391,6 @@ mod tests {
             &["create", "home/quern"][..],
             &["create", "--brief", "b"],
             &["create", "home/quern", "--brief"],
-            // Never a real write whose brief is "--dry-run".
             &["create", "home/quern", "--brief", "--dry-run"],
             &["create", "home/a", "home/b", "--brief", "b"],
             &["create", "home/quern", "--nope", "--brief", "b"],
@@ -536,9 +498,6 @@ mod tests {
         assert!(matches!(err, EstateError::Usage(_)));
     }
 
-    /// `run` logs every invocation, so each in-process `run` test points
-    /// the state dir at a scratch dir first (`progress::append` fails a
-    /// test that doesn't).
     fn scratch_state() -> (crate::test_support::TempDir, crate::test_support::EnvGuard) {
         let d = crate::test_support::TempDir::new();
         let g = crate::test_support::EnvGuard::new(
@@ -576,10 +535,6 @@ mod tests {
 
     #[test]
     fn run_logs_a_handled_error_before_exiting_1() {
-        // `list` over a malformed estates.toml: a config error, the
-        // exit-1 path, which must leave its message in the log. One
-        // EnvGuard for every variable — a second live guard would
-        // deadlock on the shared lock.
         let d = crate::test_support::TempDir::new();
         let cfg = d.path().join("config");
         std::fs::create_dir_all(&cfg).unwrap();

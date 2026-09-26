@@ -1,23 +1,10 @@
-//! The error type this package returns on purpose, as opposed to a herdr
-//! failure at the herdr CLI boundary (a separate error kind defined where
-//! that boundary is crossed).
-
 use std::fmt;
 
-/// Every error this package returns deliberately, one hand-written enum
-/// carrying only a message: the variant names the class of refusal; the
-/// message is printed as-is.
 #[derive(Debug)]
 pub enum EstateError {
-    /// The estate table, or an estate/campaign it names, can't be read.
     Config(String),
-    /// The command line or the environment doesn't give enough to act on.
     Usage(String),
-    /// A double-open or label-match guard refused to proceed.
     Guard(String),
-    /// A herdr response was missing a field this code depends on, or
-    /// wasn't shaped the way the herdr CLI boundary is documented to
-    /// shape it.
     Protocol(String),
 }
 

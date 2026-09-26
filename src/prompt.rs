@@ -1,14 +1,8 @@
-//! Assemble an estate's prompt files into ONE file: repeated
-//! --append-system-prompt-file is last-wins on claude, so herdr-estate
-//! passes exactly one, concatenated in the estate table's own order.
-
 use std::path::PathBuf;
 
 use crate::errors::EstateError;
 use crate::paths::state_dir;
 
-/// Where the assembled prompt would land — a pure computation, no I/O, so
-/// a dry-run can name the flag it would pass without writing anything.
 pub fn prompt_path(estate: &str, campaign: &str, prompt_files: &[PathBuf]) -> Option<PathBuf> {
     if prompt_files.is_empty() {
         return None;

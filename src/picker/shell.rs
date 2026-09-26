@@ -1,11 +1,3 @@
-//! Crossterm events into core events, ratatui drawing, and the terminal
-//! guard. Dispatch of the row Enter selects, or of a campaign to create,
-//! lives in `crate::dispatch`, not here — this module only drives the
-//! event loop, hands the outcome off once the terminal is already
-//! restored, and holds a failed dispatch's error on screen until a key
-//! press. Run as a herdr action, with no terminal to drive, it opens the
-//! picker popup instead.
-
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
@@ -36,14 +28,6 @@ use crate::picker::rows;
 use crate::picker::theme::{self, Palette};
 use crate::progress;
 
-/// Restores the terminal on drop — normal return, an early `?`, or a
-/// panic unwinding through the scope that holds it — so raw mode and the
-/// alternate screen are never left behind on any exit path. Constructed
-/// only after `ratatui::try_init` has already succeeded, so a guard is
-/// never live over a terminal `run_interactive` failed to enter (that
-/// path restores directly — see `run_interactive`). The restore
-/// function is a field, not a direct call, so a test can substitute one
-/// and observe that `Drop` actually ran it.
 struct RestoreGuard {
     restore: fn(),
 }
@@ -54,7 +38,6 @@ impl RestoreGuard {
     }
 }
 
-/// Bracketed paste off, then ratatui's own restore.
 fn restore() {
     let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
     ratatui::restore();
@@ -66,28 +49,15 @@ impl Drop for RestoreGuard {
     }
 }
 
-/// The plugin id and pane entrypoint `herdr-plugin.toml` declares for
-/// the popup picker (a test holds this to the manifest).
 pub const PLUGIN_ID: &str = "herdr-estate";
 pub const PICKER_ENTRYPOINT: &str = "picker";
 
-/// Whether this `pick` opens the picker popup instead of drawing. herdr
-/// runs a plugin action with no terminal, so a key bound to the `pick`
-/// action has nothing to draw in and used to fail with "could not start
-/// the terminal". The popup entrypoint gets one. A process that is
-/// itself the entrypoint never re-opens it, whatever else is set, so the
-/// popup can't open itself in a loop.
 pub fn opens_popup_instead_of_drawing(render_once: bool) -> bool {
     !render_once
         && non_empty_env("HERDR_PLUGIN_ACTION_ID").is_some()
         && non_empty_env("HERDR_PLUGIN_ENTRYPOINT_ID").is_none()
 }
 
-/// Open the picker entrypoint as a popup over the active pane, the call
-/// `herdr plugin pane open --plugin herdr-estate --entrypoint picker`
-/// makes by hand. That popup runs `pick` again, with a terminal.
-/// `$HERDR_PLUGIN_ID` names the plugin when herdr set it, so an install
-/// under another id still opens its own pane.
 pub fn open_popup() -> Result<i32, EstateError> {
     let plugin_id = non_empty_env("HERDR_PLUGIN_ID").unwrap_or_else(|| PLUGIN_ID.to_string());
     progress::step("opening the picker popup");
@@ -106,12 +76,6 @@ pub fn open_popup() -> Result<i32, EstateError> {
     Ok(0)
 }
 
-/// Build the row list, then either print one static frame
-/// (`render_once`) or run the interactive picker and dispatch whatever
-/// it selected. A `build_rows` failure (herdr unreachable, `workspace
-/// list` malformed) is returned before the picker opens: it never opens
-/// a half-true list. Inside herdr the popup's screen is painted herdr's
-/// panel first (`Panel`), so the wait for that list shows no ring.
 pub fn run(
     estates: &toml::Table,
     render_once: bool,
@@ -119,8 +83,6 @@ pub fn run(
     height: usize,
 ) -> Result<i32, EstateError> {
     if render_once {
-        // Plain text has no colours, but it shows the same glyphs the
-        // popup would.
         let built_rows = rows::build_rows(estates)?;
         let (_, ind) = theme::load();
         let state = AppState::new(built_rows);
@@ -130,23 +92,16 @@ pub fn run(
         return Ok(0);
     }
 
-    // herdr's look, read once as the popup opens (a theme changed while
-    // it is open shows the next time it opens).
     let look = theme::load();
     let panel = Panel::new(look.0);
     let built_rows = rows::build_rows(estates)?;
 
     let state = AppState::new(built_rows).with_estates(creatable_estates(estates));
     let outcome = run_interactive(state, look)?;
-    // A failure is held on screen: the popup closes the moment this
-    // process exits, and an error returned straight to `cli::run` would
-    // print into a pane that is already gone.
     let popup_workspace = detach::popup_workspace_id();
     let handed = detach::self_hosted(&outcome, popup_workspace.as_deref())
         .map(|(action, address)| (action, address.to_string()));
     let dispatched = match (popup_workspace.as_deref(), handed) {
-        // Closing this row's workspace would end this process partway,
-        // so herdr runs the dispatch instead (`detach`).
         (Some(workspace), Some((action, address))) => {
             if let Some(p) = panel.0.as_ref() {
                 let _ = paint_panel(&mut std::io::stdout(), p);
@@ -173,20 +128,11 @@ pub fn run(
     }
 }
 
-/// How a dispatch that returned ended, for `run`.
 enum Dispatched {
     Done,
-    /// The run `detach::hand_off` handed to herdr failed; it logged why,
-    /// and its output is already on this screen: the popup only holds it.
     FailedAndSaid,
 }
 
-/// Dispatch what the picker chose on the restored terminal, so its
-/// progress lines show in the popup while `agent start` waits. ratatui's
-/// restore went back to the main screen, where those lines show, so
-/// inside herdr (`panel`) it is painted onto `out` again first. A cancel
-/// exits next, so its paint never shows. `run` has already handed a row
-/// on the popup's own workspace to herdr, so this never closes that one.
 fn dispatch_outcome(
     estates: &toml::Table,
     outcome: Outcome,
@@ -205,11 +151,6 @@ fn dispatch_outcome(
     }
 }
 
-/// Paint a whole screen herdr's panel: `panel_bg` behind `text`, every
-/// cell cleared to it, the cursor home. herdr's pane emulator
-/// (libghostty-vt) erases with the cursor's background (Screen.zig
-/// 1995-1998, used at :1830), so the clear fills every cell, and the
-/// plain lines written after it (progress.rs's) keep those colours.
 fn paint_panel(out: &mut impl Write, p: &Palette) -> std::io::Result<()> {
     ratatui::crossterm::queue!(
         out,
@@ -221,11 +162,6 @@ fn paint_panel(out: &mut impl Write, p: &Palette) -> std::io::Result<()> {
     out.flush()
 }
 
-/// herdr's panel on the popup's own screen, outside ratatui's frames:
-/// painted as the picker starts and again by `dispatch_outcome`, then
-/// SGR 0 when it drops, on every exit path. Only inside herdr
-/// (`$HERDR_PLUGIN_ID` set), whose popup frame rings any cell left the
-/// terminal's own background; a shell run keeps its terminal's colours.
 struct Panel(Option<Palette>);
 
 impl Panel {
@@ -247,8 +183,6 @@ impl Drop for Panel {
     }
 }
 
-/// Raw mode on and off. Crossterm's in production; a test substitutes
-/// recorders, the same seam `RestoreGuard::restore` is.
 struct RawMode {
     enable: fn() -> std::io::Result<()>,
     disable: fn() -> std::io::Result<()>,
@@ -259,18 +193,11 @@ const CROSSTERM_RAW_MODE: RawMode = RawMode {
     disable: ratatui::crossterm::terminal::disable_raw_mode,
 };
 
-/// A failed dispatch, kept readable: report it (stderr and the log),
-/// then hold the popup open until a key press, since the popup closes
-/// the moment this process exits. Raw mode, so a single key ends it with
-/// no Enter. Returns 1, the code `cli::run` gives the same error.
-/// Best-effort: a terminal that refuses raw mode or a read that fails
-/// skips the wait rather than hanging the popup.
 fn report_and_hold(err: &EstateError, events: &mut impl EventSource, raw: &RawMode) -> i32 {
     progress::report_error(err);
     hold(events, raw)
 }
 
-/// `report_and_hold`'s hold alone, for a failure already reported.
 fn hold(events: &mut impl EventSource, raw: &RawMode) -> i32 {
     let _ = writeln!(std::io::stderr(), "press any key to close");
     let raw_on = (raw.enable)().is_ok();
@@ -282,12 +209,6 @@ fn hold(events: &mut impl EventSource, raw: &RawMode) -> i32 {
     1
 }
 
-/// Throw away input typed before the error showed. Keys pressed while
-/// `agent start` blocked sit in the tty's queue (the terminal was
-/// restored to cooked mode for dispatch, and entering raw mode does not
-/// flush it), and the first of them would end the hold before the error
-/// could be read. Runs after raw mode is on, so a partial line typed in
-/// cooked mode is readable too.
 fn drain_pending(events: &mut impl EventSource) {
     while matches!(events.poll(Duration::ZERO), Ok(true)) {
         if events.read().is_err() {
@@ -296,9 +217,6 @@ fn drain_pending(events: &mut impl EventSource) {
     }
 }
 
-/// Read until a key press: a resize, a key release or repeat, or any
-/// other event is not the operator answering, so it keeps waiting. A
-/// read error ends the wait.
 fn wait_for_press(events: &mut impl EventSource) {
     loop {
         match events.read() {
@@ -309,10 +227,6 @@ fn wait_for_press(events: &mut impl EventSource) {
     }
 }
 
-/// The estates a campaign can be created in, those whose campaigns
-/// directory exists, each with that directory for the brief step, under
-/// the root as estates.toml writes it (normally `~/...`), so the step's
-/// "(untracked; not committed)" fits an 80-column popup.
 fn creatable_estates(estates: &toml::Table) -> BTreeMap<String, String> {
     estates
         .iter()
@@ -330,10 +244,6 @@ fn creatable_estates(estates: &toml::Table) -> BTreeMap<String, String> {
 }
 
 fn run_interactive(state: AppState, look: (Palette, Indicators)) -> Result<Outcome, EstateError> {
-    // `try_init` enables raw mode before entering the alternate screen;
-    // if the second step fails, raw mode is already on with nothing yet
-    // constructed to undo it on drop. Restore directly on this path
-    // rather than leaving the caller's terminal raw.
     let mut terminal = match ratatui::try_init() {
         Ok(t) => t,
         Err(e) => {
@@ -344,18 +254,11 @@ fn run_interactive(state: AppState, look: (Palette, Indicators)) -> Result<Outco
         }
     };
     let _guard = RestoreGuard::new();
-    // A paste arrives whole, so its newlines can't press Enter.
     ratatui::crossterm::execute!(std::io::stdout(), EnableBracketedPaste)
         .map_err(|e| EstateError::Protocol(format!("could not start the terminal: {e}")))?;
     event_loop(&mut terminal, state, &mut CrosstermEvents, look)
 }
 
-/// Where `event_loop` gets its input from — real crossterm in
-/// production, a scripted sequence in a test. Abstracting this (rather
-/// than `event_loop` calling `crossterm::event::poll`/`read` directly)
-/// is what lets a test drive the loop's resize-continue branch, its
-/// no-event-continue branch and its key-event arm without a real
-/// terminal: nothing could reach any of them before this seam existed.
 trait EventSource {
     fn poll(&mut self, timeout: Duration) -> std::io::Result<bool>;
     fn read(&mut self) -> std::io::Result<TermEvent>;
@@ -373,8 +276,6 @@ impl EventSource for CrosstermEvents {
     }
 }
 
-/// The style a segment's tone is painted in: herdr's token for it, on
-/// `panel_bg`. `Fill` is blank panel, so its foreground never shows.
 fn tone_style(tone: Tone, p: &Palette) -> Style {
     let fg = match tone {
         Tone::Fill | Tone::Text => p.text,
@@ -386,8 +287,6 @@ fn tone_style(tone: Tone, p: &Palette) -> Style {
     Style::new().fg(fg).bg(p.panel_bg)
 }
 
-/// The selection bar, herdr's selected-row style (overlays.rs:817-821):
-/// contrast text on accent, bold. The glyph and meta take it too.
 fn bar_style(p: &Palette) -> Style {
     Style::new()
         .fg(p.contrast())
@@ -395,9 +294,6 @@ fn bar_style(p: &Palette) -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// One `ViewLine` as a styled ratatui line. On the selected line every
-/// segment but the gutter takes the bar, so the bar spans columns
-/// 1..=W−1 and the gutter stays panel.
 fn styled_line(line: &ViewLine, p: &Palette) -> Line<'static> {
     let spans: Vec<Span<'static>> = line
         .segs
@@ -415,10 +311,6 @@ fn styled_line(line: &ViewLine, p: &Palette) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Draw and read keys until `core::update` sets an outcome. The palette
-/// and indicator style are passed in rather than loaded here, so a test
-/// paints with a known palette and never reads the operator's herdr
-/// config.
 fn event_loop<B: ratatui::backend::Backend>(
     terminal: &mut ratatui::Terminal<B>,
     mut state: AppState,
@@ -429,9 +321,6 @@ fn event_loop<B: ratatui::backend::Backend>(
         terminal
             .draw(|frame| {
                 let area = frame.area();
-                // Every cell is panel_bg first, as herdr's `panel()`
-                // fills its modals (overlays.rs:228-233), so the picker
-                // and herdr's frame around it read as one surface.
                 frame
                     .buffer_mut()
                     .set_style(area, Style::new().bg(palette.panel_bg).fg(palette.text));
@@ -442,18 +331,12 @@ fn event_loop<B: ratatui::backend::Backend>(
                     .map(|line| styled_line(line, &palette))
                     .collect();
                 frame.render_widget(Paragraph::new(lines), area);
-                // The picker is fullscreen, so the frame's area starts at
-                // the origin and the view's cursor is already in terminal
-                // coordinates. herdr forwards a popup's cursor to the
-                // real terminal (client/shell.rs:270-277).
                 if let Some(cursor) = view.cursor {
                     frame.set_cursor_position(cursor);
                 }
             })
             .map_err(|e| EstateError::Protocol(format!("could not draw the picker: {e}")))?;
 
-        // Poll so a resize or quiet terminal can't block here forever;
-        // a real interactive session blocks on the next key as normal.
         let has_event = events
             .poll(Duration::from_millis(250))
             .map_err(|e| EstateError::Protocol(format!("could not poll for input: {e}")))?;
@@ -471,9 +354,6 @@ fn event_loop<B: ratatui::backend::Backend>(
                     state = core::update(state, core_event);
                 }
             }
-            // Typed in, first line only and never as Enter, so a paste
-            // can't open a row or create a campaign. Terminals often
-            // paste a newline as CR.
             TermEvent::Paste(text) => {
                 let first = text.split(['\r', '\n']).next().unwrap_or("");
                 for c in first.chars().filter(|c| !c.is_control()) {
@@ -489,20 +369,10 @@ fn event_loop<B: ratatui::backend::Backend>(
     }
 }
 
-/// `None` only for a release/repeat event on a platform that reports
-/// them: those never reach `core::update`, so Ctrl-f's arm survives
-/// them untouched, the same as it always has. Every genuine press
-/// reaches `update` as `Some`, mapped to its own event or, for one this
-/// picker gives no other meaning to, `CoreEvent::Other` -- so the arm
-/// still disarms on it, the same as any mapped key.
 fn translate_key(key: KeyEvent) -> Option<CoreEvent> {
     if key.kind != KeyEventKind::Press {
         return None;
     }
-    // A chord, not text: Alt+f must not type "f", nor a Cmd chord herdr
-    // passes through reach the filter or, with ctrl held, act as a key.
-    // Still routed through as `Other` so the arm disarms on it like any
-    // other key.
     if matches!(key.code, KeyCode::Char(_))
         && (key.modifiers.contains(KeyModifiers::ALT)
             || key.modifiers.contains(KeyModifiers::SUPER))
@@ -537,11 +407,6 @@ mod event_loop_tests {
     use ratatui::backend::TestBackend;
     use std::collections::VecDeque;
 
-    /// A scripted `EventSource`: `NoEvent` makes one `poll` return
-    /// `Ok(false)` (the quiet-terminal branch); `Event` makes `poll`
-    /// return `Ok(true)` and the next `read` return it. A script that
-    /// runs out without the loop having reached `state.done` panics
-    /// rather than spinning forever.
     enum Scripted {
         NoEvent,
         Event(TermEvent),
@@ -615,15 +480,12 @@ mod event_loop_tests {
         ratatui::Terminal::new(TestBackend::new(40, 10)).unwrap()
     }
 
-    /// herdr's default look, injected so no test reads a real config.
     fn catppuccin() -> (Palette, Indicators) {
         (Palette::catppuccin(), Indicators::Dots)
     }
 
     #[test]
     fn a_quiet_poll_continues_the_loop_instead_of_reading() {
-        // If the `!has_event` guard were deleted, this would call
-        // `read()` with nothing scripted for it and panic.
         let mut terminal = test_terminal();
         let mut events = ScriptedEvents::new(vec![
             Scripted::NoEvent,
@@ -642,12 +504,6 @@ mod event_loop_tests {
 
     #[test]
     fn a_resize_event_continues_the_loop_instead_of_acting_on_it() {
-        // If the resize arm's `continue` were deleted (falling through
-        // to the `_ => {}` arm instead), the loop would still continue
-        // — but it would then also miss `state.done` being unset and
-        // loop with no event consumed. This pins the observable
-        // behaviour: a resize changes nothing and the next scripted key
-        // still decides the outcome.
         let mut terminal = test_terminal();
         let mut events = ScriptedEvents::new(vec![
             Scripted::Event(TermEvent::Resize(80, 24)),
@@ -665,12 +521,6 @@ mod event_loop_tests {
 
     #[test]
     fn an_unmapped_key_between_two_ctrl_f_presses_disarms_instead_of_firing() {
-        // Ctrl-f arms an idle row; Tab is unmapped but must still reach
-        // core::update and disarm it (translate_key routes it as
-        // `Other` rather than dropping it as `None`, which would leave
-        // the arm untouched). The next Ctrl-f then only re-arms, so Esc
-        // cancels the picker rather than the second Ctrl-f firing
-        // FreshRunning on an arm two key presses stale.
         let mut terminal = test_terminal();
         let mut events = ScriptedEvents::new(vec![
             Scripted::Event(ctrl_key_press('f')),
@@ -688,7 +538,6 @@ mod event_loop_tests {
         assert_eq!(outcome, Outcome::Cancelled);
     }
 
-    /// `home`, an estate a campaign can be created in.
     fn home() -> BTreeMap<String, String> {
         BTreeMap::from([("home".to_string(), "/e/home/campaigns".to_string())])
     }
@@ -722,10 +571,6 @@ mod event_loop_tests {
 
     #[test]
     fn a_paste_types_its_first_line_and_never_presses_enter() {
-        // Were a paste's newlines Enter presses, the first would create
-        // home/q with the brief "x" before the keys after it ran; were
-        // its tab typed, the address would carry it. A CR ends the first
-        // line as an LF does, and the second paste's LF ends its own.
         let script = vec![
             Scripted::Event(TermEvent::Paste("home/\tq\rx\r".to_string())),
             Scripted::Event(key_press(KeyCode::Enter)),
@@ -755,7 +600,6 @@ mod event_loop_tests {
         }
         std::fs::create_dir_all(d.path().join("home/campaigns")).unwrap();
         std::fs::create_dir(d.path().join("bare")).unwrap();
-        // Under the root as written, not expanded.
         assert_eq!(
             creatable_estates(&estates),
             BTreeMap::from([("home".to_string(), "~/home/campaigns".to_string())])
@@ -786,8 +630,6 @@ mod event_loop_tests {
     #[test]
     fn the_frame_is_herdrs_panel_with_a_gutter_a_selection_bar_and_a_cursor() {
         use ratatui::style::Color;
-        // 40x10, catppuccin, one New row: the frame drawn before the Esc
-        // is the one left in the backend.
         let mut terminal = test_terminal();
         let mut events = ScriptedEvents::new(vec![Scripted::Event(key_press(KeyCode::Esc))]);
         let outcome = event_loop(
@@ -802,8 +644,6 @@ mod event_loop_tests {
         let panel = Color::Rgb(0x18, 0x18, 0x25);
         let accent = Color::Rgb(0x89, 0xb4, 0xfa);
         let buf = terminal.backend().buffer().clone();
-        // The gutter is panel on every row, and so is every cell off the
-        // selection bar: nothing shows the terminal's own background.
         for y in 0..10u16 {
             assert_eq!(buf[(0, y)].bg, panel, "gutter, row {y}");
             for x in 0..40u16 {
@@ -812,8 +652,6 @@ mod event_loop_tests {
                 }
             }
         }
-        // The one row is selected: the bar spans columns 1..=39, bold,
-        // in contrast text, and leaves the gutter out.
         for x in 1..=39u16 {
             let cell = &buf[(x, 2)];
             assert_eq!(cell.bg, accent, "bar at ({x},2)");
@@ -822,8 +660,6 @@ mod event_loop_tests {
         }
         assert_ne!(buf[(0, 2)].bg, accent);
         assert!(!buf[(0, 2)].modifier.contains(Modifier::BOLD));
-        // Text starts at x=2 behind a blank x=1: the filter line, the
-        // detail line and the footer. The address starts at x=4.
         for y in [0u16, 8, 9] {
             assert_eq!(buf[(1, y)].symbol(), " ", "row {y}");
             assert_ne!(buf[(2, y)].symbol(), " ", "row {y}");
@@ -832,7 +668,6 @@ mod event_loop_tests {
         assert_eq!(buf[(4, 2)].symbol(), "h");
         assert_eq!(buf[(1, 1)].symbol(), "─");
         assert_eq!(buf[(1, 1)].fg, Color::Rgb(0x45, 0x47, 0x5a));
-        // The cursor sits on the placeholder's first cell.
         terminal.backend_mut().assert_cursor_position((4, 0));
     }
 
@@ -861,9 +696,6 @@ mod event_loop_tests {
     #[test]
     fn the_popup_paints_in_the_look_herdrs_config_names() {
         use ratatui::style::Color;
-        // The operator's theme, vesper, with symbols. `run` hands the
-        // look it loads to the loop `run_interactive` runs once the
-        // terminal is up, so this is the popup reading herdr's config.
         let d = crate::test_support::TempDir::new();
         let cfg = d.path().join("config.toml");
         std::fs::write(
@@ -894,21 +726,13 @@ mod event_loop_tests {
             Outcome::Cancelled
         );
         let buf = terminal.backend().buffer();
-        // herdr's symbol for working, not its default dot...
         assert_eq!(buf[(2, 2)].symbol(), "◐");
-        // ...on vesper's accent bar (#ffc799), under its rule (#282828).
         assert_eq!(buf[(2, 2)].bg, Color::Rgb(255, 199, 153));
         assert_eq!(buf[(1, 1)].fg, Color::Rgb(40, 40, 40));
     }
 
     #[test]
     fn a_pick_dispatches_on_a_screen_painted_herdrs_panel_again() {
-        // Inside herdr the main screen the dispatch's progress shows on
-        // is painted vesper's panel first: #1a1a1a behind #ffffff,
-        // cleared to, the cursor home. A shell run (no panel) leaves it
-        // alone. Either way the live row's workspace is focused. The hold
-        // for a failure is `run`'s, so a failed dispatch here fails fast
-        // rather than waiting on this terminal for a key.
         let vesper = "[theme]\nname = \"vesper\"\n".parse().unwrap();
         let vesper = theme::resolve(Some(&vesper)).0;
         let painted = "\x1b[48;2;26;26;26m\x1b[38;2;255;255;255m\x1b[2J\x1b[1;1H";
@@ -943,14 +767,6 @@ mod event_loop_tests {
 
     #[test]
     fn fresh_running_dispatches_to_stop_and_fresh_not_open_row() {
-        // The routing itself, not the guard it runs through (`verbs`
-        // owns and tests that): `Outcome::FreshRunning` must reach
-        // `dispatch::fresh_row_running`, never `open_row`'s plain focus.
-        // With no `home` estate configured, `fresh_with_ids_stop_running`
-        // fails resolving the campaign before it ever calls herdr; had
-        // this gone to `open_row` instead, its Live-row branch calls
-        // `workspace list` first regardless, so a herdr call of any kind
-        // here would mean the wrong path ran.
         let d = crate::test_support::TempDir::new();
         let fake = crate::test_support::FakeHerdr::new();
         let _g = crate::test_support::EnvGuard::set(&[
@@ -978,16 +794,6 @@ mod event_loop_tests {
 
     #[test]
     fn fresh_running_reaches_the_stop_and_fresh_verb_not_the_ordinary_refusing_one() {
-        // The test above shows FreshRunning does not reach `open_row`,
-        // but `fresh_row` and `fresh_row_running` both resolve the
-        // campaign first and fail identically with no estate
-        // configured -- that alone cannot tell the two apart. With a
-        // real estate and an idle, owned workspace they diverge
-        // sharply: `fresh_row`'s `check_live_workspace` refuses an idle
-        // workspace outright ("already open ... with a running
-        // agent"), while `fresh_row_running` closes and recreates it.
-        // A mutation routing `FreshRunning` to `fresh_row` instead
-        // would turn this close call into that refusal.
         let tmp = crate::test_support::TempDir::new();
         let root = tmp.path().join("home");
         let cdir = root.join("campaigns").join("garden");
@@ -1017,7 +823,7 @@ mod event_loop_tests {
             r#"{"result": {"workspace": {"label": "home/garden", "agent_status": "idle", "pane_count": 1}}}"#,
             0,
         );
-        fake.set_response(2, r#"{"result": {}}"#, 0); // close
+        fake.set_response(2, r#"{"result": {}}"#, 0);
         fake.set_response(
             3,
             r#"{"result": {
@@ -1025,9 +831,9 @@ mod event_loop_tests {
                 "root_pane": {"pane_id": "p1"}
             }}"#,
             0,
-        ); // create
-        fake.set_response(4, r#"{"result": {}}"#, 0); // start
-        fake.set_response(5, r#"{"result": {}}"#, 0); // focus
+        );
+        fake.set_response(4, r#"{"result": {}}"#, 0);
+        fake.set_response(5, r#"{"result": {}}"#, 0);
 
         let mut home_table = toml::Table::new();
         home_table.insert(
@@ -1054,18 +860,6 @@ mod event_loop_tests {
     fn every_cluster_is_painted_where_the_core_measured_it() {
         use ratatui::buffer::CellWidth;
         use ratatui::layout::Position;
-        // Addresses whose clusters take more or fewer cells than their
-        // chars do one by one: a joined emoji (2 cells, 4 by char), an
-        // emoji with its selector (2, 1 by char), a flag, a skin tone,
-        // an accent spelled as macOS spells file names, a halfwidth
-        // sound mark and CJK. ratatui measures each line afresh as it
-        // paints it, so where it puts the right-aligned text, the end of
-        // the bar and the end of the typed query shows whether the core
-        // counted the same cells. Each address is typed into the filter
-        // too, so the query goes through the same measure. The state is
-        // typed before the loop starts, so the backend holds a single
-        // frame: over several, ratatui skips a cell a wide char covers,
-        // and TestBackend (unlike a terminal) keeps what was there.
         let p = Palette::catppuccin();
         let addresses = [
             "home/👩\u{200D}🔬lab",
@@ -1097,18 +891,12 @@ mod event_loop_tests {
                     (from..=to).map(|x| at(x, y)).collect()
                 };
                 let ctx = format!("{address:?} at width {width}");
-                // The selected row's bar reaches the last column, whose
-                // cell is blank...
                 assert_eq!(buf[(width - 1, 2)].bg, p.accent, "{ctx}");
                 assert_eq!(at(width - 1, 2), " ", "{ctx}");
-                // ...and right-aligned text ends one cell short of it.
                 if width >= 17 {
                     assert_eq!(run(2, width - 4, width - 2), "new", "{ctx}");
                     assert_eq!(run(0, width - 11, width - 2), "1 campaign", "{ctx}");
                 }
-                // The cursor sits right after the query as ratatui
-                // painted it, stepping over each wide cluster's second
-                // cell.
                 let mut x = 4;
                 while at(x, 0) != " " {
                     x += at(x, 0).cell_width().max(1);
@@ -1117,8 +905,6 @@ mod event_loop_tests {
             }
         }
     }
-
-    // --- wait_for_press: the hold after a failed dispatch ---
 
     #[test]
     fn the_error_hold_waits_through_a_resize_and_a_release_and_ends_on_the_first_press() {
@@ -1131,7 +917,6 @@ mod event_loop_tests {
             Scripted::Event(key_press(KeyCode::Enter)),
         ]);
         wait_for_press(&mut events);
-        // Stopped at the Esc press: the Enter after it is never read.
         assert_eq!(events.0.len(), 1);
     }
 
@@ -1145,7 +930,6 @@ mod event_loop_tests {
             Ok(())
         }
         fn off() -> std::io::Result<()> {
-            // Raw mode goes off only after it went on.
             assert_eq!(ON.load(Ordering::SeqCst), 1);
             OFF.fetch_add(1, Ordering::SeqCst);
             Ok(())
@@ -1155,10 +939,6 @@ mod event_loop_tests {
             "HERDR_PLUGIN_STATE_DIR",
             d.path().to_str().unwrap(),
         )]);
-        // An Enter typed while `agent start` blocked is already queued
-        // when the hold begins; the drain throws it away (the NoEvent
-        // is the queue running dry), and only the Esc after it — the
-        // operator answering the error — ends the hold.
         let mut events = ScriptedEvents::new(vec![
             Scripted::Event(key_press(KeyCode::Enter)),
             Scripted::NoEvent,
@@ -1233,11 +1013,6 @@ mod restore_guard_tests {
 
     #[test]
     fn drop_calls_the_restore_function() {
-        // The doc comment promises raw mode and the alternate screen are
-        // never left behind on any exit path — that promise rests on
-        // `Drop::drop` actually running the restore function, which no
-        // test observed before this one substituted a fake for the real
-        // `ratatui::restore`.
         CALLED.store(false, Ordering::SeqCst);
         {
             let _guard = RestoreGuard {
@@ -1290,10 +1065,6 @@ mod translate_key_tests {
 
     #[test]
     fn a_char_with_alt_or_super_types_nothing_but_still_disarms() {
-        // Even with ctrl held: Cmd+Ctrl+f is not Ctrl-f. It reaches
-        // `update` as `Other` rather than `None`, so it still disarms
-        // Ctrl-f's second press like any other key, even though it
-        // types nothing into the filter.
         let cmd_ctrl = KeyModifiers::SUPER | KeyModifiers::CONTROL;
         for modifier in [KeyModifiers::ALT, KeyModifiers::SUPER, cmd_ctrl] {
             assert!(matches!(
@@ -1361,9 +1132,6 @@ mod translate_key_tests {
 
     #[test]
     fn an_unmapped_key_disarms_only() {
-        // Tab does nothing of its own, but it must still reach `update`
-        // as `Other` rather than being dropped as `None`: dropped, it
-        // would never run the disarm and Ctrl-f's arm would survive it.
         assert!(matches!(
             translate_key(press(KeyCode::Tab, KeyModifiers::NONE)),
             Some(CoreEvent::Other)
@@ -1389,8 +1157,6 @@ mod popup_tests {
         "HERDR_PLUGIN_ID",
     ];
 
-    /// Set exactly `sets` among herdr's launch variables, unsetting the
-    /// rest, under one guard.
     fn launched_with(sets: &[(&str, &str)]) -> EnvGuard {
         let unsets: Vec<&str> = LAUNCH_VARS
             .iter()
@@ -1495,8 +1261,6 @@ mod popup_tests {
 
     #[test]
     fn the_plugin_id_and_entrypoint_match_the_manifest() {
-        // A rename in herdr-plugin.toml that missed these constants
-        // would leave the action opening a pane herdr doesn't know.
         let manifest: toml::Table =
             std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/herdr-plugin.toml"))
                 .unwrap()
@@ -1509,8 +1273,6 @@ mod popup_tests {
             .find(|p| p["id"].as_str() == Some(PICKER_ENTRYPOINT))
             .expect("a [[panes]] entry with the picker's id");
         assert_eq!(picker["placement"].as_str(), Some("popup"));
-        // A share of the window, not fixed cells, so the popup follows
-        // the window when it is resized.
         for dim in ["width", "height"] {
             let v = picker[dim].as_str().unwrap_or("");
             let pct: u32 = v

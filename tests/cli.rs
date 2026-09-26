@@ -1,15 +1,3 @@
-//! Integration tests for the built `herdr-estate` binary: subcommands,
-//! `--dry-run`, exit codes, `create`, and address derivation from
-//! `HERDR_WORKSPACE_ID`.
-//!
-//! Each test spawns the compiled binary (`env!("CARGO_BIN_EXE_herdr-estate")`)
-//! as a child process with its OWN explicit environment built on
-//! `env_clear()` — never the ambient process environment — so tests need
-//! no shared env-mutation guard and run safely in parallel. `HOME`,
-//! `HERDR_PLUGIN_CONFIG_DIR` and `HERDR_PLUGIN_STATE_DIR` all point at a
-//! fresh temp directory per test, and `HERDR_BIN_PATH` points at a fake
-//! `herdr` that records its exact argv per call and replays canned JSON.
-
 use std::process::Command;
 
 mod common;
@@ -143,7 +131,6 @@ fn resume_dry_run_prints_the_plan_and_masks_estate_env() {
     assert_eq!(fake.call_count(), 1);
     assert_eq!(fake.argv(0), vec!["workspace", "list"]);
 
-    // A dry run never mutates the continuity log.
     assert!(!root.join("campaigns/garden/sessions.log").exists());
 }
 
@@ -172,7 +159,6 @@ fn fresh_happy_path_creates_starts_and_logs() {
     let log = std::fs::read_to_string(root.join("campaigns/garden/sessions.log")).unwrap();
     assert_eq!(log.lines().count(), 1);
 
-    // The progress lines go to stderr, never stdout, which scripts read.
     let err = stderr(&out);
     assert!(err.contains("herdr-estate: home/garden: creating a workspace"));
     assert!(err.contains("herdr-estate: home/garden: starting claude in w9"));
@@ -202,11 +188,10 @@ fn a_failed_create_keeps_estate_env_values_out_of_stderr_and_the_event_log() {
     );
     f.fake
         .set_response(0, r#"{"result": {"workspaces": []}}"#, 0);
-    f.fake.set_response(1, "", 1); // workspace create fails
+    f.fake.set_response(1, "", 1);
 
     let out = run(&f, &["fresh", "home/garden"], &[]);
     assert_eq!(out.status.code(), Some(1));
-    // The real value did go to herdr; only what is shown is masked.
     assert!(f
         .fake
         .argv(1)
@@ -233,12 +218,9 @@ fn fresh_alive_workspace_refuses_and_exits_1() {
     let out = run(&f, &["fresh", "home/garden"], &[]);
     assert_eq!(out.status.code(), Some(1));
     assert!(stderr(&out).contains("herdr-estate:"));
-    assert_eq!(f.fake.call_count(), 1); // only the read, nothing closed or created
+    assert_eq!(f.fake.call_count(), 1);
 }
 
-/// Record `workspace_id` as ours in `f`'s state dir, the same file
-/// `ownership::record` writes (`{workspace_id: address}` at
-/// `owned.json`), so a dry run's close-line check finds it.
 fn record_owned(f: &Fixture, workspace_id: &str, address: &str) {
     std::fs::create_dir_all(&f.state_dir).unwrap();
     std::fs::write(
@@ -265,8 +247,6 @@ fn fresh_dry_run_close_line_names_the_owned_dormant_workspace() {
         ]}}"#,
         0,
     );
-    // The dry run re-confirms the label the same read-only way the real
-    // close would, before it prints "would close:".
     f.fake.set_response(
         1,
         r#"{"result": {"workspace": {"label": "home/garden"}}}"#,
@@ -282,10 +262,8 @@ fn fresh_dry_run_close_line_names_the_owned_dormant_workspace() {
 
 #[test]
 fn fresh_dry_run_close_line_shows_even_without_a_recorded_conversation() {
-    // The close line tracks live workspace state only, independent of
-    // whether a conversation happens to be recorded.
     let (f, root) = fixture();
-    make_campaign(&root, "garden", "---\n---\n"); // no sessions.log written
+    make_campaign(&root, "garden", "---\n---\n");
     record_owned(&f, "w1", "home/garden");
     f.fake.set_response(
         0,
@@ -350,7 +328,6 @@ fn a_missing_path_is_reported_once_the_run_passes_its_guards() {
         "garden",
         &format!("---\npaths: [{}]\n---\n", absent.display()),
     );
-    // Refused on a running agent: nothing about the path is said.
     f.fake.set_response(
         0,
         r#"{"result": {"workspaces": [
@@ -362,7 +339,6 @@ fn a_missing_path_is_reported_once_the_run_passes_its_guards() {
     assert_eq!(out.status.code(), Some(1));
     assert!(!stderr(&out).contains("add-dir"), "{}", stderr(&out));
 
-    // Past the guards, the skip is one progress line before the create.
     f.fake
         .set_response(1, r#"{"result": {"workspaces": []}}"#, 0);
     f.fake.set_response(
@@ -383,7 +359,6 @@ fn a_missing_path_is_reported_once_the_run_passes_its_guards() {
     assert!(skip < err.find("creating a workspace").unwrap(), "{err}");
 }
 
-/// A git repo with one commit at `path`, for a campaign's `worktree:`.
 fn init_repo(path: &std::path::Path) {
     std::fs::create_dir_all(path).unwrap();
     for args in [
@@ -412,8 +387,6 @@ fn init_repo(path: &std::path::Path) {
     }
 }
 
-/// A fixture whose `home/garden` names a worktree on a fresh repo, and
-/// the directory that worktree lands in once created.
 fn worktree_fixture() -> (Fixture, std::path::PathBuf) {
     let (f, root) = fixture();
     let repo = root.parent().unwrap().join("repo");
@@ -559,8 +532,6 @@ fn address_derived_from_herdr_workspace_id_when_omitted() {
         r#"{"result": {"workspace": {"label": "home/garden"}}}"#,
         0,
     );
-    // Read once to decide whether this pane's own workspace is the one
-    // the run would close, and once by the verb's guard.
     for i in [1, 2] {
         f.fake
             .set_response(i, r#"{"result": {"workspaces": []}}"#, 0);
@@ -610,7 +581,6 @@ fn unknown_campaign_is_a_handled_error_not_a_crash() {
 fn create_writes_the_campaign_and_never_calls_herdr() {
     let (f, root) = fixture();
     std::fs::create_dir_all(root.join("campaigns")).unwrap();
-    // Any herdr call would fail the run: create makes none.
     f.fake.set_response(0, "", 1);
     let out = run(&f, &["create", "home/quern", "--brief", "Grind it."], &[]);
     assert!(out.status.success(), "{}", stderr(&out));
@@ -650,7 +620,6 @@ fn create_dry_run_lists_both_files_and_writes_and_logs_nothing() {
     );
     assert!(!dir.exists());
     assert_eq!(f.fake.call_count(), 0);
-    // The run line, and no progress line after it.
     let events = std::fs::read_to_string(f.state_dir.join("events.log")).unwrap();
     assert_eq!(events.lines().count(), 1, "{events}");
 }

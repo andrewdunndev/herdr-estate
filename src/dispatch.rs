@@ -1,20 +1,3 @@
-//! Dispatch of a picker row: what Enter (or Ctrl-f) does with the row the
-//! picker's core selected, or with a campaign it asked to create. Lives
-//! beside `verbs`, not in `picker::shell` — it reuses
-//! `verbs::resume_with_ids`/`fresh_with_ids` exactly, the same
-//! functions `herdr-estate resume`/`fresh` call, so every guard those
-//! verbs enforce (ownership, alive, duplicate labels, unconfirmed close,
-//! validation before close) applies unchanged. Ctrl-f's second press on
-//! a running row instead calls `verbs::fresh_with_ids_stop_running`, a
-//! sibling that owns its own idle-or-done guard the same way. The
-//! picker adds no way around any of them: a Live row's workspace is
-//! re-read at dispatch time (`doubleopen::live_workspace`) and only
-//! focused directly when it is still genuinely alive; a row that turned
-//! out dormant, gone or duplicated by the time Enter fires is handed to
-//! `resume_with_ids` just like a `Dormant` row, so the create-or-refuse
-//! decision is always made inside the verb, never on the stale row the
-//! list build saw.
-
 use crate::detach::RowAction;
 use crate::doubleopen;
 use crate::errors::EstateError;
@@ -23,9 +6,6 @@ use crate::picker::core::{Row, RowState};
 use crate::progress;
 use crate::verbs;
 
-/// Act on the selected row, then focus whatever workspace ends up
-/// carrying its address. Errors (a guard refusal, a herdr failure)
-/// propagate without focusing anything.
 pub fn open_row(estates: &toml::Table, row: &Row) -> Result<(), EstateError> {
     let workspace_id = match &row.state {
         RowState::Live { .. } => open_live(estates, &row.address)?,
@@ -43,15 +23,6 @@ pub fn open_row(estates: &toml::Table, row: &Row) -> Result<(), EstateError> {
     focus(&row.address, workspace_id)
 }
 
-/// Enter on a Live row. It only names an address that carried a
-/// workspace when the list was built; the picker can sit open for a
-/// while, so that workspace's liveness (or existence) is re-read here
-/// rather than trusted from the stale row. Only a workspace that is
-/// genuinely alive right now is focus-only. Anything else (the agent
-/// exited, the workspace closed, a duplicate label) goes through
-/// `resume_with_ids`, which owns the alive check, the
-/// close-and-recreate decision and the duplicate-label refusal, exactly
-/// as it does for a `Dormant` row. Returns the workspace to focus.
 fn open_live(estates: &toml::Table, address: &str) -> Result<String, EstateError> {
     match doubleopen::live_workspace(address)? {
         Some(ws) if doubleopen::workspace_alive(&ws) => {
@@ -70,12 +41,6 @@ fn open_live(estates: &toml::Table, address: &str) -> Result<String, EstateError
     }
 }
 
-/// `pick --dispatch <action>`: what the popup's row asked for, run by
-/// the herdr action `detach::hand_off` invoked, because the row's
-/// workspace is the popup's; `address` is that invocation context's
-/// workspace label. The row was
-/// Live when the popup chose it, so `open` takes the Live row's path;
-/// `fresh` and `stop` never read the row's state at all.
 pub fn run_action(
     estates: &toml::Table,
     action: RowAction,
@@ -91,10 +56,6 @@ pub fn run_action(
     }
 }
 
-/// Ctrl-f on a row, and Enter on a New one: start a fresh conversation
-/// through `verbs::fresh_with_ids`, whatever the row's state, then focus
-/// the workspace it opens. The verb owns every refusal, a running agent
-/// included, and the retired conversation id stays in `sessions.log`.
 pub fn fresh_row(estates: &toml::Table, address: &str) -> Result<(), EstateError> {
     let result = verbs::fresh_with_ids(estates, address, false)?;
     let workspace_id = result.workspace_id.ok_or_else(|| {
@@ -103,13 +64,6 @@ pub fn fresh_row(estates: &toml::Table, address: &str) -> Result<(), EstateError
     focus(address, workspace_id)
 }
 
-/// Ctrl-f's second press, armed on a row `core::arm_eligible` already
-/// found idle or done: stop that agent and start a fresh conversation
-/// through `verbs::fresh_with_ids_stop_running`, then focus the
-/// workspace it opens. The verb re-reads the workspace and owns the
-/// idle-or-done guard itself, so a status that changed between the arm
-/// and this second press refuses here exactly as `fresh_row` refuses a
-/// working or blocked one.
 pub fn fresh_row_running(estates: &toml::Table, address: &str) -> Result<(), EstateError> {
     let result = verbs::fresh_with_ids_stop_running(estates, address)?;
     let workspace_id = result.workspace_id.ok_or_else(|| {
@@ -118,13 +72,6 @@ pub fn fresh_row_running(estates: &toml::Table, address: &str) -> Result<(), Est
     focus(address, workspace_id)
 }
 
-/// Enter on the picker's `+ create` line, with a brief typed: create the
-/// campaign (`verbs::create_campaign`), then open it as the New row it
-/// now is, through `open_row`. It reads `workspace list` first, and
-/// while any workspace carries the address (even one herdr-estate did
-/// not make, which the picker never shows) it writes and logs nothing.
-/// If the open then fails, nothing is deleted: the campaign stays, a new
-/// row, and a step says so.
 pub fn create_and_open(
     estates: &toml::Table,
     address: &str,
@@ -164,11 +111,6 @@ mod tests {
     use crate::herdrcli::AgentStatus;
     use crate::test_support::{EnvGuard, FakeHerdr, TempDir};
 
-    /// Same shape as `verbs`'s own `make_fixture`: one estate, `home`,
-    /// rooted under a fresh temp dir, `$HOME` and the ownership state
-    /// dir both pointed at throwaway dirs, `$HERDR_BIN_PATH` at the
-    /// fake. `campaign` creates `campaigns/<name>/campaign.md` on
-    /// demand — a dispatch test only ever touches one.
     struct Fixture {
         _tmp: TempDir,
         _env: EnvGuard,
@@ -233,8 +175,6 @@ mod tests {
     #[test]
     fn live_row_only_focuses_the_known_workspace_id() {
         let f = make_fixture();
-        // The dispatch-time re-read agrees with the row: still alive,
-        // same workspace id.
         f.fake.set_response(
             0,
             r#"{"result": {"workspaces": [
@@ -266,12 +206,7 @@ mod tests {
     #[test]
     fn live_row_genuinely_alive_never_runs_prepare() {
         let mut f = make_fixture();
-        // The campaign must actually resolve, or a resolve failure
-        // masks whatever the focus-only path does with prepare instead
-        // of proving it never runs.
         f.campaign("garden");
-        // A binary that doesn't exist: if this focus-only path ran it,
-        // the run would fail right here.
         if let Some(toml::Value::Table(row)) = f.estates.get_mut("home") {
             row.insert(
                 "prepare".to_string(),
@@ -311,8 +246,6 @@ mod tests {
         std::fs::create_dir_all(&proj).unwrap();
         std::fs::write(proj.join("old-sid.jsonl"), "{}\n").unwrap();
 
-        // resume_with_ids's own sequence: workspace list (none live),
-        // create, agent start — then dispatch's own focus call.
         f.fake.set_response(0, empty_list(), 0);
         f.fake.set_response(1, CREATE_OK, 0);
         f.fake.set_response(2, r#"{"result": {}}"#, 0);
@@ -330,11 +263,6 @@ mod tests {
         assert_eq!(f.fake.argv(0), vec!["workspace", "list"]);
         assert_eq!(f.fake.argv(1)[..3], ["workspace", "create", "--cwd"]);
         assert_eq!(f.fake.argv(2)[..2], ["agent", "start"]);
-        // The verb this branch must call, pinned to its distinguishing
-        // flag: `fresh_with_ids` in its place would produce the same
-        // argv shape (`agent start ...`) but never `--resume`, and would
-        // append a new conversation id to the log instead of leaving it
-        // alone.
         let start_argv = f.fake.argv(2);
         assert!(start_argv.iter().any(|a| a == "--resume"), "{start_argv:?}");
         assert!(start_argv.iter().any(|a| a == "old-sid"), "{start_argv:?}");
@@ -366,9 +294,6 @@ mod tests {
         assert_eq!(f.fake.argv(0), vec!["workspace", "list"]);
         assert_eq!(f.fake.argv(1)[..2], ["workspace", "create"]);
         assert_eq!(f.fake.argv(2)[..2], ["agent", "start"]);
-        // Mirrors the dormant case: a New row's verb must be
-        // `fresh_with_ids`, never `--resume` (there is nothing recorded
-        // to resume), and it must append the new conversation id.
         let start_argv = f.fake.argv(2);
         assert!(
             !start_argv.iter().any(|a| a == "--resume"),
@@ -407,7 +332,6 @@ mod tests {
     fn a_guard_refusal_creates_nothing_starts_nothing_and_never_focuses() {
         let f = make_fixture();
         f.campaign("attic");
-        // Already alive: `agent_status` is anything but "unknown".
         f.fake.set_response(
             0,
             r#"{"result": {"workspaces": [
@@ -423,9 +347,8 @@ mod tests {
         };
         let err = open_row(&f.estates, &row).unwrap_err();
         assert!(matches!(err, EstateError::Guard(_)));
-        assert_eq!(f.fake.call_count(), 1); // only the workspace list probe
+        assert_eq!(f.fake.call_count(), 1);
 
-        // Refused before any step: nothing claims a start or a focus.
         assert!(crate::progress::logged_messages().is_empty());
     }
 
@@ -441,15 +364,15 @@ mod tests {
                 {"workspace_id": "w1", "label": "home/garden", "agent_status": "idle", "pane_count": 1}
             ]}}"#,
             0,
-        ); // check_replaceable_running_workspace's live_workspace
+        );
         f.fake.set_response(
             1,
             r#"{"result": {"workspace": {"label": "home/garden", "agent_status": "idle", "pane_count": 1}}}"#,
             0,
-        ); // close_if_ours get
-        f.fake.set_response(2, r#"{"result": {}}"#, 0); // close
-        f.fake.set_response(3, CREATE_OK, 0); // create
-        f.fake.set_response(4, r#"{"result": {}}"#, 0); // start
+        );
+        f.fake.set_response(2, r#"{"result": {}}"#, 0);
+        f.fake.set_response(3, CREATE_OK, 0);
+        f.fake.set_response(4, r#"{"result": {}}"#, 0);
 
         fresh_row_running(&f.estates, "home/garden").unwrap();
 
@@ -464,10 +387,6 @@ mod tests {
 
     #[test]
     fn run_action_stop_is_the_whole_stop_close_create_start_and_focus() {
-        // `pick --dispatch stop`, as the handed-off process runs it: the
-        // same verb Ctrl-f's second press reaches in the popup, through
-        // to the focus, with the retired id kept and ownership moved to
-        // the new workspace.
         let f = make_fixture();
         let cdir = f.campaign("garden");
         crate::continuity::append(&cdir, "old-sid").unwrap();
@@ -484,9 +403,9 @@ mod tests {
             r#"{"result": {"workspace": {"label": "home/garden", "agent_status": "idle", "pane_count": 1}}}"#,
             0,
         );
-        f.fake.set_response(2, r#"{"result": {}}"#, 0); // close
-        f.fake.set_response(3, CREATE_OK, 0); // create
-        f.fake.set_response(4, r#"{"result": {}}"#, 0); // start
+        f.fake.set_response(2, r#"{"result": {}}"#, 0);
+        f.fake.set_response(3, CREATE_OK, 0);
+        f.fake.set_response(4, r#"{"result": {}}"#, 0);
 
         run_action(&f.estates, RowAction::Stop, "home/garden").unwrap();
 
@@ -515,8 +434,6 @@ mod tests {
 
     #[test]
     fn run_action_fresh_refuses_a_running_agent_the_way_ctrl_f_does() {
-        // `fresh`, not `stop`: the ordinary verb, which refuses an
-        // attached agent and never closes it.
         let f = make_fixture();
         f.campaign("garden");
         crate::ownership::record("home/garden", "w2").unwrap();
@@ -536,9 +453,6 @@ mod tests {
     fn fresh_row_running_refuses_a_working_agent_and_never_closes_or_focuses() {
         let f = make_fixture();
         f.campaign("garden");
-        // Owned, so the guard that actually refuses is the status
-        // check, not the ownership check beneath it (which would
-        // refuse just as well on an unrecorded w1).
         crate::ownership::record("home/garden", "w1").unwrap();
         f.fake.set_response(
             0,
@@ -550,18 +464,12 @@ mod tests {
 
         let err = fresh_row_running(&f.estates, "home/garden").unwrap_err();
         assert!(matches!(err, EstateError::Guard(_)));
-        assert_eq!(f.fake.call_count(), 1); // only the re-read, no close call
+        assert_eq!(f.fake.call_count(), 1);
         assert!(crate::progress::logged_messages().is_empty());
     }
 
     #[test]
     fn live_row_whose_workspace_went_not_alive_resumes_instead_of_focusing_the_dead_shell() {
-        // The row was built while an agent was still attached (Live,
-        // agent_status "working"), but by dispatch time the agent has
-        // exited: a fresh `workspace list` shows the same workspace id
-        // with agent_status "unknown" (not alive). Enter must not focus
-        // that dead shell — it must resume the recorded conversation,
-        // which owns closing and recreating the workspace.
         let f = make_fixture();
         let cdir = f.campaign("garden");
         crate::continuity::append(&cdir, "old-sid").unwrap();
@@ -573,9 +481,6 @@ mod tests {
         let not_alive_list = r#"{"result": {"workspaces": [
             {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown"}
         ]}}"#;
-        // 0: open_row's own re-read. 1: check_live_workspace inside
-        // resume_with_ids. 2: close_if_ours's pre-close label get. 3: the
-        // close itself. 4: create. 5: agent start. 6: dispatch's focus.
         f.fake.set_response(0, not_alive_list, 0);
         f.fake.set_response(1, not_alive_list, 0);
         f.fake.set_response(
@@ -588,8 +493,6 @@ mod tests {
         f.fake.set_response(5, r#"{"result": {}}"#, 0);
         f.fake.set_response(6, r#"{"result": {}}"#, 0);
 
-        // The row as the picker drew it: still Live, still carrying the
-        // stale workspace id from the listing that built the row.
         let row = Row {
             address: "home/garden".to_string(),
             state: RowState::Live {
@@ -620,15 +523,10 @@ mod tests {
 
     #[test]
     fn live_row_whose_workspace_closed_meanwhile_falls_through_to_fresh() {
-        // Symmetric case: the workspace the row named is gone entirely by
-        // dispatch time. With no recorded conversation either, this must
-        // route through resume (which itself falls back to fresh) rather
-        // than fail with a focus error on a workspace id that no longer
-        // exists.
         let f = make_fixture();
         f.campaign("attic");
-        f.fake.set_response(0, empty_list(), 0); // open_row's re-read
-        f.fake.set_response(1, empty_list(), 0); // check_live_workspace
+        f.fake.set_response(0, empty_list(), 0);
+        f.fake.set_response(1, empty_list(), 0);
         f.fake.set_response(2, CREATE_OK, 0);
         f.fake.set_response(3, r#"{"result": {}}"#, 0);
         f.fake.set_response(4, r#"{"result": {}}"#, 0);
@@ -653,10 +551,6 @@ mod tests {
 
     #[test]
     fn duplicate_labels_on_a_live_row_refuse_before_focusing_either() {
-        // The row was built as an ordinary Live row from whichever
-        // workspace `workspace list` returned first; the dispatch-time
-        // re-read must still see both and refuse rather than focus one
-        // of the two arbitrarily.
         let f = make_fixture();
         f.campaign("garden");
         f.fake.set_response(
@@ -704,9 +598,6 @@ mod tests {
         assert_eq!(f.fake.call_count(), 1);
     }
 
-    // --- create_and_open ---
-
-    /// `home/quern`'s directory, under a campaigns directory that exists.
     fn quern(f: &Fixture) -> std::path::PathBuf {
         let campaigns = f.root.join("campaigns");
         std::fs::create_dir_all(&campaigns).unwrap();
@@ -717,7 +608,6 @@ mod tests {
     fn create_refuses_while_any_workspace_carries_the_label_and_writes_nothing() {
         let f = make_fixture();
         let dir = quern(&f);
-        // Not alive and not ours: a workspace build_rows never shows.
         f.fake.set_response(
             0,
             r#"{"result": {"workspaces": [
@@ -734,8 +624,6 @@ mod tests {
 
     #[test]
     fn a_create_the_verb_refuses_never_starts_the_campaign() {
-        // The label is free, but the campaign appeared after the picker
-        // built its rows: the verb refuses, and nothing opens it.
         let f = make_fixture();
         let dir = f.campaign("garden");
         f.fake.set_response(0, empty_list(), 0);
@@ -744,7 +632,7 @@ mod tests {
             matches!(&err, EstateError::Usage(m) if m.ends_with("already a campaign")),
             "{err}"
         );
-        assert_eq!(f.fake.call_count(), 1); // only the label check
+        assert_eq!(f.fake.call_count(), 1);
         assert!(crate::continuity::read(&dir).is_empty());
         assert!(crate::progress::logged_messages().is_empty());
     }
@@ -753,8 +641,8 @@ mod tests {
     fn create_writes_the_campaign_then_opens_it_as_a_new_row() {
         let f = make_fixture();
         let dir = quern(&f);
-        f.fake.set_response(0, empty_list(), 0); // the label check
-        f.fake.set_response(1, empty_list(), 0); // fresh's own check
+        f.fake.set_response(0, empty_list(), 0);
+        f.fake.set_response(1, empty_list(), 0);
         f.fake.set_response(2, CREATE_OK, 0);
         f.fake.set_response(3, r#"{"result": {}}"#, 0);
         f.fake.set_response(4, r#"{"result": {}}"#, 0);
@@ -779,7 +667,7 @@ mod tests {
         let dir = quern(&f);
         f.fake.set_response(0, empty_list(), 0);
         f.fake.set_response(1, empty_list(), 0);
-        f.fake.set_response(2, "", 1); // workspace create fails
+        f.fake.set_response(2, "", 1);
 
         assert!(create_and_open(&f.estates, "home/quern", "Grind.").is_err());
         assert!(dir.join("campaign.md").is_file());

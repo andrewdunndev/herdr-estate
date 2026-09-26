@@ -1,11 +1,6 @@
-//! Small path helpers shared across the crate.
-
 use std::env;
 use std::path::PathBuf;
 
-/// A non-empty environment variable, or `None` — an empty string is
-/// treated the same as unset. `pub(crate)`: `herdrcli` and `verbs` both
-/// read env vars with this same truthiness rule.
 pub(crate) fn non_empty_env(key: &str) -> Option<String> {
     match env::var(key) {
         Ok(v) if !v.is_empty() => Some(v),
@@ -13,11 +8,6 @@ pub(crate) fn non_empty_env(key: &str) -> Option<String> {
     }
 }
 
-/// The invoking user's home directory, read from `$HOME`. There is no
-/// fallback to a passwd database lookup here (that would need an extra
-/// dependency); an unset `$HOME` yields an empty path, so a leading `~`
-/// is left as `~` by `expand` below rather than resolving to nothing
-/// useful.
 pub(crate) fn home_dir() -> PathBuf {
     match non_empty_env("HOME") {
         Some(h) => PathBuf::from(h),
@@ -25,8 +15,6 @@ pub(crate) fn home_dir() -> PathBuf {
     }
 }
 
-/// `$VAR` and `${VAR}` expansion: an unset or malformed reference is
-/// left in the string unexpanded.
 fn expand_vars(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len());
@@ -69,10 +57,6 @@ fn is_word_byte(b: u8) -> bool {
     b == b'_' || b.is_ascii_alphanumeric()
 }
 
-/// A leading `~` or `~/rest` expanded against `$HOME`. `~otheruser` (a
-/// different user's home, via a passwd lookup) is left unexpanded — not
-/// reachable from any estate or campaign file in this project, and not
-/// worth an extra dependency.
 fn expand_user(p: &str) -> PathBuf {
     if p == "~" {
         return home_dir();
@@ -83,30 +67,13 @@ fn expand_user(p: &str) -> PathBuf {
     PathBuf::from(p)
 }
 
-/// `~` and `$VAR` expansion, the same tolerance campaign files and the
-/// estate table both rely on.
 pub fn expand<S: AsRef<str>>(p: S) -> PathBuf {
     expand_user(&expand_vars(p.as_ref()))
 }
 
-/// herdr's own app-dir name and this plugin's id, mirrored from herdr
-/// v0.9.1 so a bare shell invocation lands on the exact directory herdr
-/// itself would hand this plugin via `HERDR_PLUGIN_STATE_DIR`: herdr's
-/// `state_dir()` is `$XDG_STATE_HOME/herdr` or `$HOME/.local/state/herdr`
-/// (herdr `src/config/io.rs:37`, non-Windows fallback at `:88`), and
-/// `plugin_state_dir(id)` joins `plugins/<id>` onto that (herdr
-/// `src/plugin_paths.rs:21-25`). `"herdr-estate"` passes herdr's path-
-/// component sanitizer unchanged (lowercase ASCII and `-` only), so no
-/// sanitizing is needed here.
 const HERDR_APP_DIR_NAME: &str = "herdr";
 const PLUGIN_ID: &str = "herdr-estate";
 
-/// Where this plugin's own runtime files (ownership record, `events.log`,
-/// assembled prompts, worktree checkouts) live: `$HERDR_PLUGIN_STATE_DIR`
-/// when herdr sets it (running as a plugin action), else the same
-/// `<state root>/herdr/plugins/herdr-estate` path herdr would set that
-/// variable to, so a bare shell invocation and a herdr-launched one share
-/// one directory.
 pub fn state_dir() -> PathBuf {
     if let Some(d) = non_empty_env("HERDR_PLUGIN_STATE_DIR") {
         return PathBuf::from(d);
@@ -120,12 +87,6 @@ pub fn state_dir() -> PathBuf {
         .join(PLUGIN_ID)
 }
 
-/// Where herdr keeps this plugin's config: `$HERDR_PLUGIN_CONFIG_DIR`
-/// when herdr sets it (a plugin action or pane), else the directory
-/// herdr would set it to, `<config root>/herdr/plugins/config/herdr-estate`
-/// with `$XDG_CONFIG_HOME` or `$HOME/.config` as the root. That is what
-/// `herdr plugin config-dir herdr-estate` prints, so a shell run and a
-/// herdr-launched one read the same estate table.
 pub fn plugin_config_dir() -> PathBuf {
     if let Some(d) = non_empty_env("HERDR_PLUGIN_CONFIG_DIR") {
         return PathBuf::from(d);
@@ -189,15 +150,12 @@ mod tests {
 
     #[test]
     fn expand_trailing_dollar_left_literal() {
-        // '$' as the very last byte: i + 1 < bytes.len() is false, so the
-        // char-copy path below must still run rather than skip a byte.
         let _g = EnvGuard::unset(&["HOME"]);
         assert_eq!(expand("a$"), PathBuf::from("a$"));
     }
 
     #[test]
     fn expand_unterminated_brace_left_literal() {
-        // No closing '}' anywhere in the string.
         let _g = EnvGuard::unset(&["HOME"]);
         assert_eq!(expand("a${x"), PathBuf::from("a${x"));
     }

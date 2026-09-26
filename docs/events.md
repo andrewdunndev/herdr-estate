@@ -47,8 +47,8 @@ covers every launch path, one timestamped line per step.
 
 The state dir is `$HERDR_PLUGIN_STATE_DIR` when herdr sets it (an
 action, or the picker pane), otherwise `$XDG_STATE_HOME/herdr/plugins/herdr-estate`
-or `~/.local/state/herdr/plugins/herdr-estate` — the same directory
-herdr itself would set that variable to, so a shell invocation and a
+or `~/.local/state/herdr/plugins/herdr-estate`. That is the directory
+herdr itself would set the variable to, so a shell invocation and a
 herdr-launched one land in the same place. It also holds the ownership
 record (`owned.json`), each campaign's assembled prompt
 (`<estate>-<campaign>.prompt.md`) the worktrees the verbs create

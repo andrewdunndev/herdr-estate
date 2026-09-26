@@ -1,8 +1,3 @@
-//! Scaffolding shared by tests/cli.rs and tests/picker.rs: a unique
-//! per-test temp dir, a fake `herdr` that records exact argv and replays
-//! canned JSON, and the one-estate `home` fixture both files spawn the
-//! built binary against, with its own `env_clear()`'d environment.
-
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,9 +17,6 @@ pub fn unique_dir(tag: &str) -> PathBuf {
     path
 }
 
-/// A fake `herdr` that records its argv per call (0-based, in call
-/// order) to a calls directory, and replays whatever canned stdout/exit
-/// code was queued for that call index before the binary under test ran.
 pub struct FakeHerdr {
     dir: PathBuf,
 }
@@ -106,7 +98,6 @@ pub fn make_campaign(root: &Path, name: &str, frontmatter: &str) -> PathBuf {
     cdir
 }
 
-/// A fixture with one estate, `home`, rooted at the returned directory.
 pub fn fixture() -> (Fixture, PathBuf) {
     let base = unique_dir("fixture");
     let root = base.join("home");
@@ -134,8 +125,6 @@ pub fn run(f: &Fixture, args: &[&str], extra_env: &[(&str, &str)]) -> Output {
         .env("HERDR_PLUGIN_CONFIG_DIR", &f.config_dir)
         .env("HERDR_PLUGIN_STATE_DIR", &f.state_dir)
         .env("HERDR_BIN_PATH", f.fake.bin_path())
-        // `git` (worktrees), `hostname` (continuity) and `kill`
-        // (doubleopen's liveness probe) all live under these two.
         .env("PATH", "/usr/bin:/bin");
     for (k, v) in extra_env {
         cmd.env(k, v);
