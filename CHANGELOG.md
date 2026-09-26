@@ -10,7 +10,9 @@
   actions, `dispatch-open`, `dispatch-fresh` and `dispatch-stop`, which
   herdr runs outside every workspace. The replacement is created,
   started and focused as it is from any other workspace, and a refusal
-  still holds in the popup.
+  still holds in the popup, as does herdr's own error for a run that
+  never started. The popup waits on the run for at most 60 seconds,
+  then names its plugin log entry.
 
 ## v0.2.1 - 2026-09-25
 

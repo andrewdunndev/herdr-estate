@@ -24,9 +24,39 @@ use crate::paths::non_empty_env;
 use crate::picker::core::{Outcome, RowState};
 use crate::picker::shell::PLUGIN_ID;
 use crate::progress;
+use crate::verbs;
 
-/// How often the popup re-reads the handed-off run's log entry.
-const POLL: Duration = Duration::from_millis(150);
+/// How the popup waits on a handed-off run: how often it re-reads the
+/// run's log entry, how long it waits in all, and how many reads in a
+/// row may miss the entry before that is an error.
+struct Wait {
+    poll: Duration,
+    deadline: Duration,
+    missing_polls: u32,
+}
+
+/// A handed-off run is one verb: at most `verbs::AGENT_START_TIMEOUT_MS`
+/// waiting on the agent, plus a margin for everything around it (the
+/// guards' reads, the close, the create, the focus). Past that, the
+/// popup stops waiting and says where the run's log is; the run itself
+/// carries on in herdr. A new entry can take a read or two to show in
+/// the listing, so a few misses are retried before one is an error.
+fn production_wait() -> Wait {
+    Wait {
+        poll: Duration::from_millis(500),
+        deadline: Duration::from_secs(verbs::agent_start_timeout_secs() + DEADLINE_MARGIN_SECS),
+        missing_polls: 10,
+    }
+}
+
+/// `production_wait`'s allowance past the agent start, for the reads and calls
+/// around it.
+const DEADLINE_MARGIN_SECS: u64 = 30;
+
+/// How many of the plugin's newest log entries each read asks for,
+/// explicitly: herdr's default page is undocumented, and `[[events]]`
+/// runs share this plugin's log.
+const LOG_LIMIT: &str = "50";
 
 /// What a picker row asked for: Enter (`open`), Ctrl-f (`fresh`), or
 /// Ctrl-f's second press on an idle or done agent (`stop`). Each has its
@@ -144,13 +174,18 @@ pub fn hand_off(action: RowAction, address: &str, workspace_id: &str) -> Result<
         .ok_or_else(|| {
             EstateError::Protocol(format!("{action_id}: herdr's reply named no log entry"))
         })?;
-    wait_for_run(&plugin_id, log_id)
+    wait_for_run(&plugin_id, log_id, &production_wait())
 }
 
 /// Poll `plugin log list` until `log_id` is no longer running. A failed
 /// run's stderr, its progress lines and its error, is written to this
-/// process's stderr so the popup shows why.
-fn wait_for_run(plugin_id: &str, log_id: &str) -> Result<bool, EstateError> {
+/// process's stderr so the popup shows why, and so is herdr's own
+/// `error` for a run that never started (a missing binary, say). A run
+/// still going at `wait.deadline`, or an entry missing from
+/// `wait.missing_polls` reads in a row, is an error naming the entry.
+fn wait_for_run(plugin_id: &str, log_id: &str, wait: &Wait) -> Result<bool, EstateError> {
+    let started = std::time::Instant::now();
+    let mut missed = 0;
     loop {
         let listed = herdrcli::call_herdr(
             &[
@@ -159,6 +194,8 @@ fn wait_for_run(plugin_id: &str, log_id: &str) -> Result<bool, EstateError> {
                 "list".to_string(),
                 "--plugin".to_string(),
                 plugin_id.to_string(),
+                "--limit".to_string(),
+                LOG_LIMIT.to_string(),
             ],
             true,
         )?;
@@ -167,19 +204,61 @@ fn wait_for_run(plugin_id: &str, log_id: &str) -> Result<bool, EstateError> {
             .get("logs")
             .and_then(|l| l.as_array())
             .and_then(|logs| logs.iter().find(|e| e["log_id"] == log_id))
-            .cloned()
-            .ok_or_else(|| EstateError::Protocol(format!("plugin log list: no entry {log_id}")))?;
-        if entry["status"] == "running" {
-            std::thread::sleep(POLL);
+            .cloned();
+        let running = match &entry {
+            None => {
+                missed += 1;
+                if missed >= wait.missing_polls {
+                    return Err(EstateError::Protocol(format!(
+                        "plugin log list: no entry {log_id} after {missed} reads"
+                    )));
+                }
+                true
+            }
+            Some(entry) => {
+                missed = 0;
+                entry["status"] == "running"
+            }
+        };
+        if running {
+            if started.elapsed() >= wait.deadline {
+                return Err(EstateError::Protocol(format!(
+                    "herdr's run is still going after {}s; see plugin log {log_id} (`herdr plugin log list`)",
+                    wait.deadline.as_secs()
+                )));
+            }
+            std::thread::sleep(wait.poll);
             continue;
         }
+        let entry = entry.unwrap_or_default();
         let ok = entry["status"] == "succeeded" && entry["exit_code"] == 0;
         if !ok {
-            use std::io::Write;
-            let stderr = entry["stderr"].as_str().unwrap_or("");
-            let _ = write!(std::io::stderr(), "{stderr}");
+            relay_failure(&entry, log_id, &mut std::io::stderr());
         }
         return Ok(ok);
+    }
+}
+
+/// A failed run's `stderr`, then herdr's `error` when it set one, or a
+/// line naming the entry when neither says anything.
+fn relay_failure(entry: &serde_json::Value, log_id: &str, out: &mut impl std::io::Write) {
+    let said = |key: &str| entry[key].as_str().filter(|s| !s.trim().is_empty());
+    let stderr = said("stderr");
+    let error = said("error");
+    if let Some(stderr) = stderr {
+        let _ = write!(out, "{stderr}");
+        if !stderr.ends_with('\n') {
+            let _ = writeln!(out);
+        }
+    }
+    if let Some(error) = error {
+        let _ = writeln!(out, "herdr-estate: {error}");
+    }
+    if stderr.is_none() && error.is_none() {
+        let _ = writeln!(
+            out,
+            "herdr-estate: run {log_id} failed with no output; see `herdr plugin log list`"
+        );
     }
 }
 
@@ -396,7 +475,104 @@ mod tests {
         assert_eq!(fake.call_count(), 2);
         assert_eq!(
             fake.argv(1),
-            vec!["plugin", "log", "list", "--plugin", "herdr-estate"]
+            vec![
+                "plugin",
+                "log",
+                "list",
+                "--plugin",
+                "herdr-estate",
+                "--limit",
+                "50"
+            ]
+        );
+    }
+
+    fn quick(deadline_ms: u64, missing_polls: u32) -> Wait {
+        Wait {
+            poll: Duration::from_millis(1),
+            deadline: Duration::from_millis(deadline_ms),
+            missing_polls,
+        }
+    }
+
+    fn with_fake_herdr(f: impl FnOnce(&FakeHerdr)) {
+        let d = TempDir::new();
+        let fake = FakeHerdr::new();
+        let _g = EnvGuard::set(&[
+            ("HERDR_BIN_PATH", fake.bin_path().to_str().unwrap()),
+            ("HERDR_PLUGIN_STATE_DIR", d.path().to_str().unwrap()),
+        ]);
+        f(&fake);
+    }
+
+    #[test]
+    fn an_entry_not_yet_listed_is_read_again_before_it_counts_as_missing() {
+        with_fake_herdr(|fake| {
+            fake.set_response(0, r#"{"result": {"logs": []}}"#, 0);
+            fake.set_response(1, &log_list("succeeded", "0", ""), 0);
+            assert!(wait_for_run("herdr-estate", "plugin-log-7", &quick(10_000, 3)).unwrap());
+            assert_eq!(fake.call_count(), 2);
+        });
+    }
+
+    #[test]
+    fn an_entry_missing_from_every_read_is_an_error_after_a_bounded_few() {
+        with_fake_herdr(|fake| {
+            for i in 0..3 {
+                fake.set_response(i, r#"{"result": {"logs": []}}"#, 0);
+            }
+            let err = wait_for_run("herdr-estate", "plugin-log-7", &quick(10_000, 3)).unwrap_err();
+            assert!(
+                matches!(&err, EstateError::Protocol(m) if m.contains("no entry plugin-log-7")),
+                "{err}"
+            );
+            assert_eq!(fake.call_count(), 3);
+        });
+    }
+
+    #[test]
+    fn a_run_still_going_at_the_deadline_is_an_error_naming_its_log_entry() {
+        with_fake_herdr(|fake| {
+            fake.set_response(0, &log_list("running", "null", ""), 0);
+            let err = wait_for_run("herdr-estate", "plugin-log-7", &quick(0, 3)).unwrap_err();
+            assert!(
+                matches!(&err, EstateError::Protocol(m) if m.contains("still going") && m.contains("plugin-log-7")),
+                "{err}"
+            );
+            assert_eq!(fake.call_count(), 1);
+        });
+    }
+
+    #[test]
+    fn a_failed_runs_stderr_and_herdrs_error_are_both_relayed() {
+        let entry = serde_json::json!({"stderr": "herdr-estate: refused", "error": "spawn failed: No such file"});
+        let mut out = Vec::new();
+        relay_failure(&entry, "plugin-log-7", &mut out);
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "herdr-estate: refused\nherdr-estate: spawn failed: No such file\n"
+        );
+    }
+
+    #[test]
+    fn a_run_that_never_started_relays_herdrs_error() {
+        let entry = serde_json::json!({"stderr": null, "error": "failed to spawn target/release/herdr-estate"});
+        let mut out = Vec::new();
+        relay_failure(&entry, "plugin-log-7", &mut out);
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "herdr-estate: failed to spawn target/release/herdr-estate\n"
+        );
+    }
+
+    #[test]
+    fn a_failed_run_with_nothing_to_say_names_its_log_entry() {
+        let entry = serde_json::json!({"stderr": "", "error": null});
+        let mut out = Vec::new();
+        relay_failure(&entry, "plugin-log-7", &mut out);
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "herdr-estate: run plugin-log-7 failed with no output; see `herdr plugin log list`\n"
         );
     }
 

@@ -501,7 +501,7 @@ fn open_workspace(
 
 /// `AGENT_START_TIMEOUT_MS` in whole seconds, for the progress line that
 /// says how long the start may take.
-fn agent_start_timeout_secs() -> u64 {
+pub(crate) fn agent_start_timeout_secs() -> u64 {
     AGENT_START_TIMEOUT_MS.parse::<u64>().unwrap_or(0) / 1000
 }
 
