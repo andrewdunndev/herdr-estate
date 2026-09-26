@@ -45,6 +45,11 @@ pub const AGENT_START_TIMEOUT_MS: &str = "30000";
 /// twice the agent start's allowance, since a prepare may fetch or
 /// build before the agent ever starts.
 pub const PREPARE_TIMEOUT_SECS: u64 = 60;
+
+/// How long, once `prepare` has exited, its output is waited on: a
+/// process it left running in the background can hold the pipes open
+/// for as long as it runs.
+const PREPARE_PIPE_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 pub const PANE_PLACEHOLDER: &str = "<PANE_ID>";
 
 /// Why `open_workspace` closes the workspace it replaces, which sets
@@ -434,7 +439,10 @@ fn run_prepare(campaign: &Campaign, address: &str, argv: &[String]) -> Result<()
 /// pipes are drained on their own threads while this waits, so a
 /// prepare that writes more than a pipe holds never stalls on it. Only
 /// the command itself is killed at the deadline; a process it started
-/// and left running is its own.
+/// and left running is its own. Such a process can hold the pipes open
+/// after the command exits, so their output is waited on for at most
+/// `PREPARE_PIPE_GRACE` (never past the deadline) and reads as empty
+/// after that, which the progress line or refusal says.
 fn run_prepare_within(
     campaign: &Campaign,
     address: &str,
@@ -456,22 +464,26 @@ fn run_prepare_within(
                 campaign.workdir.display()
             ))
         })?;
-    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+    let (sent, drained) = std::sync::mpsc::channel::<(usize, Vec<u8>)>();
+    let drain = |which: usize, pipe: Option<Box<dyn Read + Send>>| {
+        let sent = sent.clone();
         std::thread::spawn(move || {
             let mut bytes = Vec::new();
             if let Some(mut pipe) = pipe {
                 let _ = pipe.read_to_end(&mut bytes);
             }
-            bytes
-        })
+            let _ = sent.send((which, bytes));
+        });
     };
-    let stdout = drain(
+    drain(
+        0,
         child
             .stdout
             .take()
             .map(|p| Box::new(p) as Box<dyn Read + Send>),
     );
-    let stderr = drain(
+    drain(
+        1,
         child
             .stderr
             .take()
@@ -495,18 +507,35 @@ fn run_prepare_within(
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     };
+    let grace = PREPARE_PIPE_GRACE.min(timeout.saturating_sub(started.elapsed()));
+    let grace_ends = std::time::Instant::now() + grace;
+    let mut pipes: [Option<Vec<u8>>; 2] = [None, None];
+    while pipes.iter().any(Option::is_none) {
+        let left = grace_ends.saturating_duration_since(std::time::Instant::now());
+        match drained.recv_timeout(left) {
+            Ok((which, bytes)) => pipes[which] = Some(bytes),
+            Err(_) => break,
+        }
+    }
+    let held_open = pipes.iter().any(Option::is_none);
+    let [stdout, stderr] = pipes;
     let output = std::process::Output {
         status,
-        stdout: stdout.join().unwrap_or_default(),
-        stderr: stderr.join().unwrap_or_default(),
+        stdout: stdout.unwrap_or_default(),
+        stderr: stderr.unwrap_or_default(),
+    };
+    let held_note = if held_open {
+        " (its output held open by a process it left running)"
+    } else {
+        ""
     };
     if !output.status.success() {
         return Err(EstateError::Guard(format!(
-            "{address}: prepare failed: {}",
+            "{address}: prepare failed: {}{held_note}",
             prepare_failure_detail(&output)
         )));
     }
-    progress::step(&format!("{address}: prepare ok"));
+    progress::step(&format!("{address}: prepare ok{held_note}"));
     Ok(())
 }
 
@@ -1681,6 +1710,54 @@ mod tests {
             std::time::Duration::from_secs(20),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn a_prepare_that_leaves_a_process_holding_its_pipes_still_finishes() {
+        let d = crate::test_support::TempDir::new();
+        let _g = crate::test_support::EnvGuard::set(&[(
+            "HERDR_PLUGIN_STATE_DIR",
+            d.path().to_str().unwrap(),
+        )]);
+        let campaign = prepare_campaign(d.path());
+        let started = std::time::Instant::now();
+        run_prepare_within(
+            &campaign,
+            "home/garden",
+            &argv_of(&["sh", "-c", "sleep 30 & exit 0"]),
+            std::time::Duration::from_secs(20),
+        )
+        .unwrap();
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(
+            progress::logged_messages(),
+            vec!["home/garden: prepare ok (its output held open by a process it left running)"]
+        );
+    }
+
+    #[test]
+    fn a_failed_prepare_whose_pipes_stay_open_names_its_exit_and_why_it_says_no_more() {
+        let d = crate::test_support::TempDir::new();
+        let _g = crate::test_support::EnvGuard::set(&[(
+            "HERDR_PLUGIN_STATE_DIR",
+            d.path().to_str().unwrap(),
+        )]);
+        let campaign = prepare_campaign(d.path());
+        let err = run_prepare_within(
+            &campaign,
+            "home/garden",
+            &argv_of(&["sh", "-c", "echo boom >&2; sleep 30 & exit 3"]),
+            std::time::Duration::from_secs(20),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, EstateError::Guard(m) if m.contains("exit status: 3") && m.ends_with("held open by a process it left running)")),
+            "{err}"
+        );
     }
 
     #[test]
