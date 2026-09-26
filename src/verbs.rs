@@ -509,8 +509,12 @@ fn prepare_failure_detail(output: &std::process::Output) -> String {
     output.status.to_string()
 }
 
-/// Everything that can fail without herdr (prompt files exist, the
-/// estate's `prepare` command) is validated before `ws` (an owned
+/// Runs once every guard has passed: creates the campaign's worktree,
+/// if it names one (`campaign::materialise`), and builds the create and
+/// agent commands from the result, so a refused launch never leaves a
+/// worktree behind. Everything else that can fail without herdr
+/// (prompt files exist, the estate's `prepare` command, run in that
+/// workdir) is validated before `ws` (an owned
 /// workspace, either non-alive or the idle/done one
 /// `check_replaceable_running_workspace` cleared) is closed with
 /// `close_reason` naming why in the progress line. Creates the
@@ -521,13 +525,16 @@ fn prepare_failure_detail(output: &std::process::Output) -> String {
 /// `prepare` stops even earlier, before that close: neither it nor the
 /// create that would follow it ever runs.
 fn open_workspace(
-    campaign: &Campaign,
+    resolved: &Campaign,
     address: &str,
     ws: Option<Workspace>,
     close_reason: &str,
-    create_cmd: &[String],
-    agent_argv: &[String],
+    verb: Verb,
+    conversation_id: &str,
 ) -> Result<(String, String), EstateError> {
+    let campaign = &campaign::materialise(resolved)?;
+    let create_cmd = &create_args(campaign, false);
+    let agent_argv = &build_agent_argv(campaign, verb, conversation_id);
     if !campaign.prompt_files.is_empty() {
         prompt::write_prompt(&campaign.estate, &campaign.name, &campaign.prompt_files)?;
     }
@@ -643,6 +650,12 @@ fn dry_run_plan(
             }
         }
     };
+    if campaign.worktree.is_some() {
+        println!(
+            "{address}: would ensure worktree: {}",
+            campaign.workdir.display()
+        );
+    }
     print_plan(
         &campaign.missing_add_dirs,
         prepare_cmd,
@@ -673,7 +686,7 @@ pub(crate) fn resume_with_ids(
     address: &str,
     dry_run: bool,
 ) -> Result<VerbResult, EstateError> {
-    let campaign = campaign::resolve(estates, address, dry_run)?;
+    let campaign = campaign::resolve(estates, address)?;
     let conversation_id = continuity::latest_conversation(&campaign.dir);
     let conversation_id = match conversation_id {
         Some(id) => id,
@@ -697,13 +710,11 @@ pub(crate) fn resume_with_ids(
         }
     }
 
-    let agent_argv = build_agent_argv(&campaign, Verb::Resume, &conversation_id);
-    let create_cmd = create_args(&campaign, false);
-    let start_cmd = start_args(&campaign, PANE_PLACEHOLDER, &agent_argv);
-
     let ws = check_live_workspace(address)?;
 
     if dry_run {
+        let agent_argv = build_agent_argv(&campaign, Verb::Resume, &conversation_id);
+        let start_cmd = start_args(&campaign, PANE_PLACEHOLDER, &agent_argv);
         let exit_code = dry_run_plan(
             &campaign,
             address,
@@ -727,8 +738,8 @@ pub(crate) fn resume_with_ids(
         address,
         ws,
         CLOSE_REASON_EXITED,
-        &create_cmd,
-        &agent_argv,
+        Verb::Resume,
+        &conversation_id,
     )?;
     println!(
         "live  {address}  {workspace_id}  {pane_id}  [{}...]",
@@ -749,7 +760,7 @@ pub(crate) fn fresh_with_ids(
     address: &str,
     dry_run: bool,
 ) -> Result<VerbResult, EstateError> {
-    let campaign = campaign::resolve(estates, address, dry_run)?;
+    let campaign = campaign::resolve(estates, address)?;
     let old_id = fresh_registry_guard(&campaign, address)?;
     let ws = check_live_workspace(address)?;
     fresh_open(&campaign, address, old_id, ws, CLOSE_REASON_EXITED, dry_run)
@@ -768,7 +779,7 @@ pub(crate) fn fresh_with_ids_stop_running(
     estates: &toml::Table,
     address: &str,
 ) -> Result<VerbResult, EstateError> {
-    let campaign = campaign::resolve(estates, address, false)?;
+    let campaign = campaign::resolve(estates, address)?;
     let old_id = continuity::latest_conversation(&campaign.dir);
     stop_registry_guard(&campaign, address, &old_id)?;
     let ws = check_replaceable_running_workspace(address)?;
@@ -850,11 +861,10 @@ fn fresh_open(
     dry_run: bool,
 ) -> Result<VerbResult, EstateError> {
     let new_id = new_conversation_id()?;
-    let agent_argv = build_agent_argv(campaign, Verb::Fresh, &new_id);
-    let create_cmd = create_args(campaign, false);
-    let start_cmd = start_args(campaign, PANE_PLACEHOLDER, &agent_argv);
 
     if dry_run {
+        let agent_argv = build_agent_argv(campaign, Verb::Fresh, &new_id);
+        let start_cmd = start_args(campaign, PANE_PLACEHOLDER, &agent_argv);
         let exit_code = dry_run_plan(
             campaign,
             address,
@@ -879,14 +889,8 @@ fn fresh_open(
         "{address}: starting fresh conversation {}...{retiring}",
         short(&new_id)
     ));
-    let (workspace_id, pane_id) = open_workspace(
-        campaign,
-        address,
-        ws,
-        close_reason,
-        &create_cmd,
-        &agent_argv,
-    )?;
+    let (workspace_id, pane_id) =
+        open_workspace(campaign, address, ws, close_reason, Verb::Fresh, &new_id)?;
     continuity::append(&campaign.dir, &new_id)
         .map_err(|e| EstateError::Config(format!("could not append to the continuity log: {e}")))?;
     println!(
@@ -1121,6 +1125,7 @@ mod tests {
             kind_flags: BTreeMap::new(),
             env: BTreeMap::from([("K".to_string(), "V".to_string())]),
             prepare: None,
+            worktree: None,
         }
     }
 
@@ -1592,6 +1597,7 @@ mod tests {
             kind_flags: Default::default(),
             env: Default::default(),
             prepare: None,
+            worktree: None,
         }
     }
 

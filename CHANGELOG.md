@@ -13,6 +13,9 @@
   still holds in the popup, as does herdr's own error for a run that
   never started. The popup waits on the run for at most 120 seconds,
   then names its plugin log entry.
+- A refused `resume` or `fresh` no longer creates the campaign's
+  worktree first. The worktree is created once every guard has passed,
+  just before `prepare` runs in it.
 - A `paths` entry that doesn't exist is reported once the launch has
   passed its guards and `prepare`, not while the campaign resolves.
   `--dry-run` and a refused launch no longer write that warning to

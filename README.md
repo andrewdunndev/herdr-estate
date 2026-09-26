@@ -81,9 +81,10 @@ worktree:
   branch: wt/site-work
 ```
 
-`resume` and `fresh` create it if missing (a new branch starts from
-the remote default; an existing one is checked out as is), run the
-agent in it and add it to its paths. List the estate root in `paths`
+Once their guards pass, `resume` and `fresh` create it if missing (a
+new branch starts from the remote default; an existing one is checked
+out as is), then run `prepare` and the agent in it and add it to its
+paths. List the estate root in `paths`
 so the agent can still reach `log.md`.
 
 ## The verbs

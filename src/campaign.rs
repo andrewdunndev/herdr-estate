@@ -55,6 +55,17 @@ pub struct Campaign {
     /// The estate's optional `prepare` command, argv form (no shell):
     /// `None` when the estate row carries no `prepare` key.
     pub prepare: Option<Vec<String>>,
+    /// The campaign's `worktree`, when its frontmatter names both a repo
+    /// and a branch. `workdir` is then the path that worktree has or
+    /// would have; `materialise` creates it.
+    pub worktree: Option<WorktreeSpec>,
+}
+
+/// A campaign's `worktree:` frontmatter, both keys present.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeSpec {
+    pub repo: String,
+    pub branch: String,
 }
 
 fn rooted(root: &Path, p: &str) -> PathBuf {
@@ -200,11 +211,12 @@ pub fn campaigns_dir(estates: &toml::Table, estate_name: &str) -> Result<PathBuf
     estate_dirs(estates, estate_name).map(|(_, _, campaigns)| campaigns)
 }
 
-pub fn resolve(
-    estates: &toml::Table,
-    address: &str,
-    dry_run: bool,
-) -> Result<Campaign, EstateError> {
+/// Everything the verbs need to know about `address`, read from the
+/// estate table, the campaign's frontmatter and the disk, changing
+/// nothing: a worktree the campaign names is looked up, not created,
+/// so a verb can run every guard before anything exists. `materialise`
+/// is the step that creates it.
+pub fn resolve(estates: &toml::Table, address: &str) -> Result<Campaign, EstateError> {
     let (estate_name, campaign_name) = parse_address(address)?;
     let (row, root, campaigns) = estate_dirs(estates, &estate_name)?;
     let cdir = campaigns.join(&campaign_name);
@@ -279,18 +291,17 @@ pub fn resolve(
     kind_flags.extend(campaign_flags);
 
     let mut workdir = root.clone();
+    let mut worktree_spec = None;
     if let Some(wt) = fm.get("worktree").and_then(|v| v.as_table()) {
         let repo = wt.get("repo").and_then(scalar_non_empty_str);
         let branch = wt.get("branch").and_then(scalar_non_empty_str);
         if let (Some(repo), Some(branch)) = (repo, branch) {
-            if dry_run {
-                let wd = worktree::would_ensure_worktree(repo, branch)?;
-                println!("{address}: would ensure worktree: {}", wd.display());
-                workdir = wd;
-            } else {
-                workdir = worktree::ensure_worktree(repo, branch)?;
-            }
+            workdir = worktree::would_ensure_worktree(repo, branch)?;
             add_dirs.push(workdir.clone());
+            worktree_spec = Some(WorktreeSpec {
+                repo: repo.to_string(),
+                branch: branch.to_string(),
+            });
         }
     }
 
@@ -321,7 +332,28 @@ pub fn resolve(
         kind_flags,
         env,
         prepare,
+        worktree: worktree_spec,
     })
+}
+
+/// `campaign` with its worktree, if it names one, created: the one
+/// step between resolving and launching that changes the disk, run by
+/// a verb only once its guards have passed. git may register the
+/// worktree under another spelling of the path `resolve` predicted (a
+/// symlinked temp dir, say), so `workdir` and its `add_dirs` entry take
+/// the path `ensure_worktree` returns.
+pub fn materialise(campaign: &Campaign) -> Result<Campaign, EstateError> {
+    let mut materialised = campaign.clone();
+    if let Some(spec) = &campaign.worktree {
+        let made = worktree::ensure_worktree(&spec.repo, &spec.branch)?;
+        for dir in materialised.add_dirs.iter_mut() {
+            if *dir == campaign.workdir {
+                *dir = made.clone();
+            }
+        }
+        materialised.workdir = made;
+    }
+    Ok(materialised)
 }
 
 #[cfg(test)]
@@ -362,7 +394,7 @@ mod tests {
             toml::Value::String("claude".to_string()),
         );
         let estates = estates_with(r);
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.estate, "home");
         assert_eq!(c.name, "garden");
         assert_eq!(c.kind, AgentKind::Claude);
@@ -373,7 +405,7 @@ mod tests {
 
     #[test]
     fn unknown_estate_raises() {
-        assert!(resolve(&toml::Table::new(), "nope/garden", false).is_err());
+        assert!(resolve(&toml::Table::new(), "nope/garden").is_err());
     }
 
     #[test]
@@ -384,7 +416,7 @@ mod tests {
             toml::Value::String("/nonexistent-estate-root-xyz".to_string()),
         );
         let estates = estates_with(r);
-        assert!(resolve(&estates, "home/garden", false).is_err());
+        assert!(resolve(&estates, "home/garden").is_err());
     }
 
     #[test]
@@ -393,7 +425,7 @@ mod tests {
         let root = d.path().join("home");
         std::fs::create_dir_all(root.join("campaigns")).unwrap();
         let estates = estates_with(row(&root));
-        assert!(resolve(&estates, "home/garden", false).is_err());
+        assert!(resolve(&estates, "home/garden").is_err());
     }
 
     #[test]
@@ -407,7 +439,7 @@ mod tests {
             toml::Value::String("claude".to_string()),
         );
         let estates = estates_with(r);
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.kind, AgentKind::Other("codex".to_string()));
     }
 
@@ -422,7 +454,7 @@ mod tests {
             toml::Value::String("codex".to_string()),
         );
         let estates = estates_with(r);
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.kind, AgentKind::Other("codex".to_string()));
     }
 
@@ -434,7 +466,7 @@ mod tests {
         let mut r = row(&root);
         r.insert("agent".to_string(), toml::Value::String(String::new()));
         let estates = estates_with(r);
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.kind, AgentKind::Claude);
     }
 
@@ -451,7 +483,7 @@ mod tests {
             &format!("---\npaths: [{}, {}]\n---\n", a.display(), b.display()),
         );
         let estates = estates_with(row(&root));
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.add_dirs, [a, b]);
     }
 
@@ -470,7 +502,7 @@ mod tests {
             toml::Value::String("claude".to_string()),
         );
         let estates = estates_with(r);
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.kind_flags.len(), 1);
         assert_eq!(c.kind_flags["remote-control"], Scalar::Bool(true));
     }
@@ -485,7 +517,7 @@ mod tests {
         env.insert("K".to_string(), toml::Value::String("V".to_string()));
         r.insert("env".to_string(), toml::Value::Table(env));
         let estates = estates_with(r);
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.env["K"], "V");
     }
 
@@ -502,7 +534,7 @@ mod tests {
         );
         r.insert("env".to_string(), toml::Value::Table(env));
         let estates = estates_with(r);
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.env["H"], "X-Owner: home/garden");
     }
 
@@ -516,7 +548,7 @@ mod tests {
         env.insert("PORT".to_string(), toml::Value::Integer(8080));
         r.insert("env".to_string(), toml::Value::Table(env));
         let estates = estates_with(r);
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.env["PORT"], "8080");
     }
 
@@ -530,7 +562,7 @@ mod tests {
         env.insert("BAD".to_string(), toml::Value::Table(toml::Table::new()));
         r.insert("env".to_string(), toml::Value::Table(env));
         let estates = estates_with(r);
-        let err = resolve(&estates, "home/garden", false).unwrap_err();
+        let err = resolve(&estates, "home/garden").unwrap_err();
         assert!(matches!(err, EstateError::Config(_)));
         assert!(err.to_string().contains("BAD"));
     }
@@ -541,7 +573,7 @@ mod tests {
         let root = d.path().join("home");
         make_estate(&root, "garden", "---\n---\n");
         let estates = estates_with(row(&root));
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.workdir, root);
     }
 
@@ -563,7 +595,7 @@ mod tests {
             toml::Value::Array(vec![toml::Value::String(a.to_string_lossy().into_owned())]),
         );
         let estates = estates_with(r);
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.add_dirs, [a, b]);
     }
 
@@ -587,7 +619,7 @@ mod tests {
         );
         let estates = estates_with(r);
         let _g = crate::test_support::EnvGuard::set(&[("HOME", fake_home.to_str().unwrap())]);
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.add_dirs, [fake_home.join("code"), b]);
     }
 
@@ -601,7 +633,7 @@ mod tests {
         claude.insert("remote-control".to_string(), toml::Value::Boolean(true));
         r.insert("claude".to_string(), toml::Value::Table(claude));
         let estates = estates_with(r);
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.kind_flags["remote-control"], Scalar::Bool(true));
     }
 
@@ -622,7 +654,7 @@ mod tests {
         );
         r.insert("claude".to_string(), toml::Value::Table(claude));
         let estates = estates_with(r);
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(
             c.kind_flags["mcp-config"],
             Scalar::Str("campaign.json".to_string())
@@ -643,12 +675,12 @@ mod tests {
         claude.insert("remote-control".to_string(), toml::Value::Boolean(true));
         r.insert("claude".to_string(), toml::Value::Table(claude));
         let estates = estates_with(r);
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.kind_flags["remote-control"], Scalar::Bool(false));
     }
 
     #[test]
-    fn worktree_key_ensures_and_becomes_workdir() {
+    fn worktree_key_is_created_by_materialise_and_becomes_workdir() {
         let d = TempDir::new();
         let root = d.path().join("home");
         let repo_dir = d.path().join("repo");
@@ -666,10 +698,32 @@ mod tests {
             "HERDR_PLUGIN_STATE_DIR",
             d.path().join("state").to_str().unwrap(),
         )]);
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let resolved = resolve(&estates, "home/garden").unwrap();
+        assert!(!resolved.workdir.exists(), "resolve creates nothing");
+        let c = materialise(&resolved).unwrap();
         assert!(c.workdir.is_dir());
         assert_ne!(c.workdir, root);
         assert!(c.add_dirs.contains(&c.workdir));
+        assert_eq!(c.add_dirs.len(), resolved.add_dirs.len());
+        // Idempotent: a second materialise finds the same worktree.
+        assert_eq!(materialise(&resolved).unwrap().workdir, c.workdir);
+    }
+
+    #[test]
+    fn materialise_without_a_worktree_changes_nothing() {
+        let d = TempDir::new();
+        let root = d.path().join("home");
+        make_estate(
+            &root, "garden", "---
+---
+",
+        );
+        let estates = estates_with(row(&root));
+        let resolved = resolve(&estates, "home/garden").unwrap();
+        let c = materialise(&resolved).unwrap();
+        assert_eq!(c.workdir, root);
+        assert_eq!(c.add_dirs, resolved.add_dirs);
+        assert_eq!(resolved.worktree, None);
     }
 
     #[test]
@@ -682,13 +736,13 @@ mod tests {
             "---\nworktree:\n  repo: \"\"\n  branch: wt/site-work\n---\n",
         );
         let estates = estates_with(row(&root));
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         // No worktree ensured: the plain estate root, untouched.
         assert_eq!(c.workdir, root);
     }
 
     #[test]
-    fn dry_run_never_creates_the_worktree() {
+    fn resolve_never_creates_the_worktree() {
         let d = TempDir::new();
         let root = d.path().join("home");
         let repo_dir = d.path().join("repo");
@@ -706,8 +760,15 @@ mod tests {
             "HERDR_PLUGIN_STATE_DIR",
             d.path().join("state").to_str().unwrap(),
         )]);
-        let c = resolve(&estates, "home/garden", true).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert!(!c.workdir.exists());
+        assert_eq!(
+            c.worktree,
+            Some(WorktreeSpec {
+                repo: repo_dir.display().to_string(),
+                branch: "wt/site-work".to_string(),
+            })
+        );
         let listing = std::process::Command::new("git")
             .arg("-C")
             .arg(&repo_dir)
@@ -717,7 +778,7 @@ mod tests {
         assert_eq!(
             String::from_utf8_lossy(&listing.stdout).lines().count(),
             1,
-            "dry-run must not add a worktree"
+            "resolve must not add a worktree"
         );
     }
 
@@ -732,7 +793,7 @@ mod tests {
             toml::Value::Array(vec![toml::Value::String("prompts/base.md".to_string())]),
         );
         let estates = estates_with(r);
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.prompt_files, [root.join("prompts").join("base.md")]);
     }
 
@@ -747,7 +808,7 @@ mod tests {
             toml::Value::Array(vec![toml::Value::String("/etc/base.md".to_string())]),
         );
         let estates = estates_with(r);
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.prompt_files, [PathBuf::from("/etc/base.md")]);
     }
 
@@ -758,7 +819,7 @@ mod tests {
         make_estate(&root, "garden", "---\npaths: [notes]\n---\n");
         std::fs::create_dir_all(root.join("notes")).unwrap();
         let estates = estates_with(row(&root));
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.add_dirs, [root.join("notes")]);
     }
 
@@ -774,7 +835,7 @@ mod tests {
             &format!("---\npaths: [{}]\n---\n", a.display()),
         );
         let estates = estates_with(row(&root));
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.add_dirs, [a]);
     }
 
@@ -800,7 +861,7 @@ mod tests {
             "HERDR_PLUGIN_STATE_DIR",
             state_dir.to_str().unwrap(),
         )]);
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.add_dirs, [present]);
         assert_eq!(c.missing_add_dirs, [absent]);
         // Resolving runs before every guard and under --dry-run, so it
@@ -814,7 +875,7 @@ mod tests {
         let root = d.path().join("home");
         make_estate(&root, "garden", "---\n---\n");
         let estates = estates_with(row(&root));
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.prepare, None);
     }
 
@@ -834,7 +895,7 @@ mod tests {
         let estates = estates_with(r);
         let fake_home = d.path().join("fake-home");
         let _g = crate::test_support::EnvGuard::set(&[("HOME", fake_home.to_str().unwrap())]);
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(
             c.prepare,
             Some(vec![
@@ -858,7 +919,7 @@ mod tests {
             toml::Value::String("bare".to_string()),
         );
         let estates = estates_with(r);
-        let err = resolve(&estates, "home/garden", false).unwrap_err();
+        let err = resolve(&estates, "home/garden").unwrap_err();
         assert!(matches!(err, EstateError::Config(_)));
         assert!(err.to_string().contains("prepare"));
     }
@@ -871,7 +932,7 @@ mod tests {
         let mut r = row(&root);
         r.insert("prepare".to_string(), toml::Value::Array(Vec::new()));
         let estates = estates_with(r);
-        let err = resolve(&estates, "home/garden", false).unwrap_err();
+        let err = resolve(&estates, "home/garden").unwrap_err();
         assert!(matches!(err, EstateError::Config(_)));
     }
 
@@ -886,7 +947,7 @@ mod tests {
             toml::Value::Array(vec![toml::Value::Integer(1)]),
         );
         let estates = estates_with(r);
-        let err = resolve(&estates, "home/garden", false).unwrap_err();
+        let err = resolve(&estates, "home/garden").unwrap_err();
         assert!(matches!(err, EstateError::Config(_)));
     }
 
@@ -901,7 +962,7 @@ mod tests {
             toml::Value::Array(vec![toml::Value::String(String::new())]),
         );
         let estates = estates_with(r);
-        let err = resolve(&estates, "home/garden", false).unwrap_err();
+        let err = resolve(&estates, "home/garden").unwrap_err();
         assert!(matches!(err, EstateError::Config(_)));
     }
 
@@ -911,7 +972,7 @@ mod tests {
         let root = d.path().join("home");
         make_estate(&root, "garden", "---\n---\n");
         let estates = estates_with(row(&root));
-        let c = resolve(&estates, "home/garden", false).unwrap();
+        let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.add_dirs, Vec::<PathBuf>::new());
         assert!(c.kind_flags.is_empty());
     }

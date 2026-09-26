@@ -360,6 +360,113 @@ fn a_missing_path_is_reported_once_the_run_passes_its_guards() {
     assert!(skip < err.find("creating a workspace").unwrap(), "{err}");
 }
 
+/// A git repo with one commit at `path`, for a campaign's `worktree:`.
+fn init_repo(path: &std::path::Path) {
+    std::fs::create_dir_all(path).unwrap();
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+    ] {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .env("PATH", "/usr/bin:/bin")
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git {args:?}");
+    }
+}
+
+/// A fixture whose `home/garden` names a worktree on a fresh repo, and
+/// the directory that worktree lands in once created.
+fn worktree_fixture() -> (Fixture, std::path::PathBuf) {
+    let (f, root) = fixture();
+    let repo = root.parent().unwrap().join("repo");
+    init_repo(&repo);
+    make_campaign(
+        &root,
+        "garden",
+        &format!(
+            "---\nworktree:\n  repo: {}\n  branch: wt/garden\n---\n",
+            repo.display()
+        ),
+    );
+    let worktree = f.state_dir.join("worktrees/repo/wt-garden");
+    (f, worktree)
+}
+
+#[test]
+fn a_refused_launch_leaves_no_worktree_behind() {
+    let (f, worktree) = worktree_fixture();
+    f.fake.set_response(
+        0,
+        r#"{"result": {"workspaces": [
+            {"workspace_id": "w1", "label": "home/garden", "agent_status": "working"}
+        ]}}"#,
+        0,
+    );
+    let out = run(&f, &["fresh", "home/garden"], &[]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("already open"), "{}", stderr(&out));
+    assert!(
+        !worktree.exists(),
+        "refused, yet {} exists",
+        worktree.display()
+    );
+}
+
+#[test]
+fn a_dry_run_names_the_worktree_and_creates_nothing() {
+    let (f, worktree) = worktree_fixture();
+    f.fake
+        .set_response(0, r#"{"result": {"workspaces": []}}"#, 0);
+    let out = run(&f, &["fresh", "home/garden", "--dry-run"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains(&format!(
+            "home/garden: would ensure worktree: {}",
+            worktree.display()
+        )),
+        "{}",
+        stdout(&out)
+    );
+    assert!(!worktree.exists());
+}
+
+#[test]
+fn a_launch_past_its_guards_creates_the_worktree_and_starts_there() {
+    let (f, worktree) = worktree_fixture();
+    f.fake
+        .set_response(0, r#"{"result": {"workspaces": []}}"#, 0);
+    f.fake.set_response(
+        1,
+        r#"{"result": {"workspace": {"workspace_id": "w9"}, "root_pane": {"pane_id": "w9:p1"}}}"#,
+        0,
+    );
+    f.fake.set_response(2, r#"{"result": {}}"#, 0);
+    let out = run(&f, &["fresh", "home/garden"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(worktree.is_dir());
+    let create = f.fake.argv(1);
+    let cwd = &create[create.iter().position(|a| a == "--cwd").unwrap() + 1];
+    assert_eq!(
+        std::fs::canonicalize(cwd).unwrap(),
+        std::fs::canonicalize(&worktree).unwrap()
+    );
+}
+
 #[test]
 fn address_derived_from_herdr_workspace_id_when_omitted() {
     let (f, root) = fixture();

@@ -105,6 +105,7 @@ mod tests {
             kind_flags: BTreeMap::new(),
             env: BTreeMap::new(),
             prepare: None,
+            worktree: None,
         }
     }
 
