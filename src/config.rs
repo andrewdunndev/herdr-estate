@@ -3,17 +3,10 @@
 use std::path::{Path, PathBuf};
 
 use crate::errors::EstateError;
-use crate::paths::home_dir;
+use crate::paths::{home_dir, non_empty_env};
 
 pub const DEFAULT_CAMPAIGNS_DIR: &str = "campaigns";
 pub const DEFAULT_AGENT_KIND: &str = "claude";
-
-fn non_empty_env(key: &str) -> Option<String> {
-    match std::env::var(key) {
-        Ok(v) if !v.is_empty() => Some(v),
-        _ => None,
-    }
-}
 
 /// `$HERDR_PLUGIN_CONFIG_DIR/estates.toml` when herdr sets that (running
 /// as a plugin action) and the file is actually there; otherwise the
@@ -171,17 +164,6 @@ GREETING = "hi"
                 .join("herdr-estate")
                 .join("estates.toml")
         );
-    }
-
-    #[test]
-    fn empty_env_value_counts_as_unset() {
-        // Mirrors paths.rs's test of the same name for this module's own
-        // copy of the same truthiness rule. Direct, not routed through
-        // config_path()'s is_file() gate — that gate would swallow the
-        // difference on a test machine with no ./estates.toml in the
-        // working directory either way.
-        let _g = EnvGuard::set(&[("HERDR_ESTATE_TEST_EMPTY", "")]);
-        assert_eq!(non_empty_env("HERDR_ESTATE_TEST_EMPTY"), None);
     }
 
     #[test]

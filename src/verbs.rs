@@ -334,11 +334,17 @@ fn check_live_workspace(address: &str) -> Result<Option<Workspace>, EstateError>
         )));
     }
     if !ownership::is_ours(&ws.workspace_id) {
-        return Err(EstateError::Guard(format!(
-            "{address}: a workspace with this label exists that herdr-estate did not create. Close it yourself"
-        )));
+        return Err(refuse_not_ours(address));
     }
     Ok(Some(ws))
+}
+
+/// The refusal both guards give a live workspace under `address` that
+/// the ownership record doesn't name.
+fn refuse_not_ours(address: &str) -> EstateError {
+    EstateError::Guard(format!(
+        "{address}: a workspace with this label exists that herdr-estate did not create. Close it yourself"
+    ))
 }
 
 /// The picker's Ctrl-f second press only: a live, owned workspace whose
@@ -361,9 +367,7 @@ fn check_replaceable_running_workspace(address: &str) -> Result<Workspace, Estat
     let ws = doubleopen::live_workspace(address)?
         .ok_or_else(|| EstateError::Guard(format!("{address}: no running agent to stop")))?;
     if !ownership::is_ours(&ws.workspace_id) {
-        return Err(EstateError::Guard(format!(
-            "{address}: a workspace with this label exists that herdr-estate did not create. Close it yourself"
-        )));
+        return Err(refuse_not_ours(address));
     }
     match ws.pane_count {
         Some(1) => {}
@@ -692,7 +696,7 @@ pub(crate) fn resume_with_ids(
         Some(id) => id,
         None => {
             println!("{address}: no recorded conversation: resume behaves as fresh");
-            return fresh_with_ids(estates, address, dry_run);
+            return fresh_resolved(&campaign, address, dry_run);
         }
     };
 
@@ -761,9 +765,19 @@ pub(crate) fn fresh_with_ids(
     dry_run: bool,
 ) -> Result<VerbResult, EstateError> {
     let campaign = campaign::resolve(estates, address)?;
-    let old_id = fresh_registry_guard(&campaign, address)?;
+    fresh_resolved(&campaign, address, dry_run)
+}
+
+/// `fresh` from an already resolved campaign: `fresh_with_ids`, and
+/// `resume` falling back to fresh with the campaign it resolved.
+fn fresh_resolved(
+    campaign: &Campaign,
+    address: &str,
+    dry_run: bool,
+) -> Result<VerbResult, EstateError> {
+    let old_id = fresh_registry_guard(campaign, address)?;
     let ws = check_live_workspace(address)?;
-    fresh_open(&campaign, address, old_id, ws, CLOSE_REASON_EXITED, dry_run)
+    fresh_open(campaign, address, old_id, ws, CLOSE_REASON_EXITED, dry_run)
 }
 
 /// The picker's Ctrl-f second press: an idle or done agent, still
