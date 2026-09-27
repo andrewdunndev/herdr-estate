@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 590" role="img" font-family="Helvetica, Arial, sans-serif" aria-label="Each conversation runs in a workspace labeled home/garden; before it ends the agent writes log.md, and fresh starts the next conversation, which reads it.">
+  <defs>
+    <marker id="loop-arrow" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="7" refX="9" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#404040"/></marker>
+    <marker id="loop-arrow-moss" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="7" refX="9" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 Z" fill="#4a6741"/></marker>
+  </defs>
+  <rect x="0" y="0" width="1200" height="590" fill="#f4f4f4"/>
+  <text x="20" y="32" font-size="22" font-weight="700" fill="#4a6741">long-running work</text>
+  <text x="20" y="54" font-size="12" fill="#404040">one address, many conversations; log.md carries the work from each one to the next.</text>
+  <g font-family="Helvetica, Arial, sans-serif" transform="translate(0,80)">
+    <rect x="20" y="20" width="1160" height="410" rx="6" fill="#ffffff" stroke="#e0e0e0" stroke-width="1"/>
+    <!-- the campaign directory, which outlives them -->
+    <rect x="60" y="270" width="1080" height="150" rx="4" fill="#f4f4f4" stroke="#707070" stroke-width="1"/>
+    <text x="80" y="291" font-size="9" fill="#707070" font-family="Menlo, monospace" letter-spacing="0.08em">CAMPAIGN</text>
+    <text x="144" y="291" font-size="11" fill="#4a6741" font-family="Menlo, monospace">home/garden</text>
+    <text x="1120" y="291" text-anchor="end" font-size="9" fill="#707070" font-family="Menlo, monospace">campaigns/garden/</text>
+    <!-- connectors, drawn under every node -->
+    <path d="M570,90 V64 H630 V90" fill="none" stroke="#404040" stroke-width="1.5" marker-end="url(#loop-arrow)"/>
+    <text x="600" y="52" text-anchor="middle" font-size="10" fill="#404040" font-family="Menlo, monospace">resume: the same conversation continues</text>
+    <path d="M360,145 H450" fill="none" stroke="#404040" stroke-width="1.5" marker-end="url(#loop-arrow)"/>
+    <text x="405" y="136" text-anchor="middle" font-size="10" fill="#404040" font-family="Menlo, monospace">fresh</text>
+    <path d="M750,145 H840" fill="none" stroke="#404040" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#loop-arrow)"/>
+    <text x="795" y="136" text-anchor="middle" font-size="10" fill="#404040" font-family="Menlo, monospace">fresh</text>
+    <path d="M300,200 V306" fill="none" stroke="#4a6741" stroke-width="1.5" marker-end="url(#loop-arrow-moss)"/>
+    <text x="312" y="256" font-size="11" fill="#404040">the agent writes where to pick up</text>
+    <path d="M520,306 V200" fill="none" stroke="#4a6741" stroke-width="1.5" marker-end="url(#loop-arrow-moss)"/>
+    <text x="532" y="256" font-size="11" fill="#404040">the next conversation reads it</text>
+    <!-- the conversations -->
+    <rect x="60" y="90" width="300" height="110" rx="4" fill="#f4f4f4" stroke="#e0e0e0" stroke-width="1"/>
+    <text x="80" y="112" font-size="9" fill="#707070" font-family="Menlo, monospace" letter-spacing="0.08em">CONVERSATION 1</text>
+    <text x="80" y="136" font-size="13" font-weight="600" fill="#0a0a0a">retired</text>
+    <text x="80" y="160" font-size="10" fill="#404040" font-family="Menlo, monospace">claude --session-id &lt;id&gt;</text>
+    <text x="80" y="182" font-size="11" fill="#707070">in the workspace labeled home/garden</text>
+    <rect x="450" y="90" width="300" height="110" rx="4" fill="#4a6741"/>
+    <text x="470" y="112" font-size="9" fill="#ffffff" opacity="0.8" font-family="Menlo, monospace" letter-spacing="0.08em">CONVERSATION 2</text>
+    <text x="470" y="136" font-size="13" font-weight="600" fill="#ffffff">the latest</text>
+    <text x="470" y="160" font-size="10" fill="#ffffff" opacity="0.85" font-family="Menlo, monospace">claude --session-id &lt;new id&gt;</text>
+    <text x="470" y="182" font-size="11" fill="#ffffff" opacity="0.85">same address, paths, flags and prompts</text>
+    <rect x="840" y="90" width="300" height="110" rx="4" fill="#ffffff" stroke="#707070" stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="860" y="112" font-size="9" fill="#707070" font-family="Menlo, monospace" letter-spacing="0.08em">CONVERSATION 3</text>
+    <text x="860" y="136" font-size="13" font-weight="600" fill="#0a0a0a">the next one</text>
+    <text x="860" y="160" font-size="10" fill="#404040" font-family="Menlo, monospace">claude --session-id &lt;new id&gt;</text>
+    <text x="860" y="182" font-size="11" fill="#707070">the same loop, at the same address</text>
+    <!-- chips of the campaign directory -->
+    <rect x="80" y="306" width="480" height="96" rx="4" fill="#ffffff" stroke="#4a6741" stroke-width="1.5"/>
+    <text x="100" y="328" font-size="9" fill="#707070" font-family="Menlo, monospace" letter-spacing="0.08em">LOG</text>
+    <text x="100" y="352" font-size="13" font-weight="600" fill="#0a0a0a">log.md</text>
+    <text x="100" y="374" font-size="11" fill="#707070">dated entries, newest last; outlives every conversation</text>
+    <text x="100" y="390" font-size="11" fill="#707070">create writes the first one</text>
+    <rect x="590" y="306" width="270" height="96" rx="4" fill="#ffffff" stroke="#e0e0e0" stroke-width="1"/>
+    <text x="610" y="328" font-size="9" fill="#707070" font-family="Menlo, monospace" letter-spacing="0.08em">CONTINUITY</text>
+    <text x="610" y="352" font-size="13" font-weight="600" fill="#0a0a0a">sessions.log</text>
+    <text x="610" y="374" font-size="11" fill="#707070">fresh appends the new id</text>
+    <text x="610" y="390" font-size="11" fill="#707070">resume reads the last line</text>
+    <rect x="890" y="306" width="230" height="96" rx="4" fill="#ffffff" stroke="#e0e0e0" stroke-width="1"/>
+    <text x="910" y="328" font-size="9" fill="#707070" font-family="Menlo, monospace" letter-spacing="0.08em">CAMPAIGN FILE</text>
+    <text x="910" y="352" font-size="13" font-weight="600" fill="#0a0a0a">campaign.md</text>
+    <text x="910" y="374" font-size="11" fill="#707070">what the campaign is for</text>
+    <text x="910" y="390" font-size="11" fill="#707070">its agent, flags and paths</text>
+  </g>
+  <line x1="20" y1="546" x2="1180" y2="546" stroke="#e0e0e0" stroke-width="1"/>
+  <text x="20" y="568" font-size="10" fill="#909090">the estate's prompts ask the agent to keep the log: examples/home/prompts/base.md.</text>
+  <text x="1180" y="568" text-anchor="end" font-size="10" fill="#909090">src/verbs.rs</text>
+</svg>
