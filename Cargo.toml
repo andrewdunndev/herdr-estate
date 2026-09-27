@@ -1,6 +1,6 @@
 [package]
 name = "herdr-estate"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 description = "Long-running campaigns for herdr: threads of agent work, addressed as estate/campaign, that outlive every conversation."
 license = "MIT AND Apache-2.0"

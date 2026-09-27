@@ -2,28 +2,18 @@
 
 ## Unreleased
 
-- The picker run in a pane's shell, not the popup, now hands a row for
-  its own workspace to herdr as the popup does. It read that workspace
-  only from the popup's plugin context, so from a pane Ctrl-f's second
-  press on the pane's own campaign still closed the picker with the
-  workspace and started nothing. v0.2.2's fix for that press held only
-  in the popup; it now holds in a pane too, where the picker reads
-  `$HERDR_WORKSPACE_ID`.
-- An estate's `prepare` that touches the terminal, as
-  `stty -echo </dev/tty` does, no longer sits stopped until the
-  60-second limit refuses the launch as timed out. v0.2.2's own process
-  group left it on the verb's terminal but outside its foreground, where
-  any read or setting of that terminal stops it. `prepare` keeps that
-  group and now drops the terminal, so such a step fails at once, and a
-  `prepare` that exits on it is refused with its error. It stays in the
-  verb's session, which herdr signals when it closes the verb's pane,
-  popup or workspace, so that close still ends it with the verb. A
-  Ctrl-C in the terminal still doesn't reach it, and a timed-out one is
-  still killed with every process it started.
+## v0.2.3 - 2026-09-27
+
+- The picker run from a pane's shell now hands a row for its own
+  workspace to herdr, as the popup does, reading the workspace from
+  `$HERDR_WORKSPACE_ID`. v0.2.2's Ctrl-f fix held only in the popup.
+- A `prepare` step that touches the terminal, such as
+  `stty -echo </dev/tty`, now fails at once instead of sitting stopped
+  until the 60-second timeout. `prepare` keeps its own process group and
+  drops the terminal. It stays in the verb's session, so herdr closing
+  the pane, popup or workspace still ends it.
 - A failed `prepare` that left a process holding its output open is
-  refused with what it wrote before it exited, where only its exit
-  status was named. What had already been read was dropped while the
-  launch waited for the pipe to close.
+  refused with what it wrote, not only its exit status.
 
 ## v0.2.2 - 2026-09-26
 
