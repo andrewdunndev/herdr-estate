@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- The picker run in a pane's shell, not the popup, now hands a row for
+  its own workspace to herdr as the popup does. It read that workspace
+  only from the popup's plugin context, so from a pane Ctrl-f's second
+  press on the pane's own campaign still closed the picker with the
+  workspace and started nothing. v0.2.2's fix for that press held only
+  in the popup; it now holds in a pane too, where the picker reads
+  `$HERDR_WORKSPACE_ID`.
+
 ## v0.2.2 - 2026-09-26
 
 - The picker no longer stops halfway when the row it acts on is the

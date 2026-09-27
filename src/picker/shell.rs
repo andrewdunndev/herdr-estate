@@ -98,10 +98,10 @@ pub fn run(
 
     let state = AppState::new(built_rows).with_estates(creatable_estates(estates));
     let outcome = run_interactive(state, look)?;
-    let popup_workspace = detach::popup_workspace_id();
-    let handed = detach::self_hosted(&outcome, popup_workspace.as_deref())
+    let own_workspace = detach::picker_workspace_id();
+    let handed = detach::self_hosted(&outcome, own_workspace.as_deref())
         .map(|(action, address)| (action, address.to_string()));
-    let dispatched = match (popup_workspace.as_deref(), handed) {
+    let dispatched = match (own_workspace.as_deref(), handed) {
         (Some(workspace), Some((action, address))) => {
             if let Some(p) = panel.0.as_ref() {
                 let _ = paint_panel(&mut std::io::stdout(), p);

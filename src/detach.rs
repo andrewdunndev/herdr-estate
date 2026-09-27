@@ -72,8 +72,10 @@ fn context_field(key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-pub fn popup_workspace_id() -> Option<String> {
-    context_field("workspace_id")
+// The popup's workspace is the one herdr's context names; a picker run
+// from a pane's shell lives in that pane's workspace.
+pub fn picker_workspace_id() -> Option<String> {
+    context_field("workspace_id").or_else(|| non_empty_env("HERDR_WORKSPACE_ID"))
 }
 
 pub fn context_address() -> Result<String, EstateError> {
@@ -89,7 +91,7 @@ pub fn context_address() -> Result<String, EstateError> {
 // it, so a run that closes its own must be handed to a herdr action.
 pub fn self_hosted<'a>(
     outcome: &'a Outcome,
-    popup_workspace: Option<&str>,
+    picker_workspace: Option<&str>,
 ) -> Option<(RowAction, &'a str)> {
     let (action, row) = match outcome {
         Outcome::Selected(row) => (RowAction::Open, row),
@@ -98,7 +100,7 @@ pub fn self_hosted<'a>(
         Outcome::Cancelled | Outcome::Create { .. } => return None,
     };
     match &row.state {
-        RowState::Live { workspace_id, .. } if Some(workspace_id.as_str()) == popup_workspace => {
+        RowState::Live { workspace_id, .. } if Some(workspace_id.as_str()) == picker_workspace => {
             Some((action, row.address.as_str()))
         }
         _ => None,
@@ -302,7 +304,7 @@ mod tests {
     }
 
     #[test]
-    fn a_shell_run_with_no_popup_workspace_stays_in_process() {
+    fn a_run_with_no_workspace_of_its_own_stays_in_process() {
         let outcome = Outcome::FreshRunning(live("w2"));
         assert_eq!(self_hosted(&outcome, None), None);
     }
@@ -343,27 +345,50 @@ mod tests {
     }
 
     #[test]
-    fn the_popup_workspace_comes_from_herdrs_plugin_context() {
-        let _g = EnvGuard::set(&[(
-            "HERDR_PLUGIN_CONTEXT_JSON",
-            r#"{"workspace_id":"w2","workspace_label":"home/garden","focused_pane_id":"w2:p1"}"#,
-        )]);
-        assert_eq!(popup_workspace_id().as_deref(), Some("w2"));
+    fn the_popup_workspace_comes_from_herdrs_plugin_context_before_the_panes() {
+        let _g = EnvGuard::set(&[
+            (
+                "HERDR_PLUGIN_CONTEXT_JSON",
+                r#"{"workspace_id":"w2","workspace_label":"home/garden","focused_pane_id":"w2:p1"}"#,
+            ),
+            ("HERDR_WORKSPACE_ID", "w9"),
+        ]);
+        assert_eq!(picker_workspace_id().as_deref(), Some("w2"));
     }
 
     #[test]
-    fn a_missing_malformed_or_empty_context_names_no_workspace() {
+    fn a_picker_run_from_a_panes_shell_hands_off_its_own_workspace_like_the_popup() {
+        let _g = EnvGuard::new(
+            &[("HERDR_WORKSPACE_ID", "w2")],
+            &["HERDR_PLUGIN_CONTEXT_JSON"],
+        );
+        let own = picker_workspace_id();
+        assert_eq!(own.as_deref(), Some("w2"));
+        assert_eq!(
+            self_hosted(&Outcome::FreshRunning(live("w2")), own.as_deref()),
+            Some((RowAction::Stop, "home/garden"))
+        );
+    }
+
+    #[test]
+    fn a_missing_malformed_or_empty_context_outside_any_pane_names_no_workspace() {
         {
-            let _g = EnvGuard::unset(&["HERDR_PLUGIN_CONTEXT_JSON"]);
-            assert_eq!(popup_workspace_id(), None);
+            let _g = EnvGuard::unset(&["HERDR_PLUGIN_CONTEXT_JSON", "HERDR_WORKSPACE_ID"]);
+            assert_eq!(picker_workspace_id(), None);
         }
         for json in [
             "not json",
             r#"{"tab_id":"w2:t1"}"#,
             r#"{"workspace_id":""}"#,
         ] {
-            let _g = EnvGuard::set(&[("HERDR_PLUGIN_CONTEXT_JSON", json)]);
-            assert_eq!(popup_workspace_id(), None, "{json}");
+            let _g = EnvGuard::new(
+                &[
+                    ("HERDR_PLUGIN_CONTEXT_JSON", json),
+                    ("HERDR_WORKSPACE_ID", ""),
+                ],
+                &[],
+            );
+            assert_eq!(picker_workspace_id(), None, "{json}");
         }
     }
 
