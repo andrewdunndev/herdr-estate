@@ -15,8 +15,9 @@ tab, pane, agent) are only ever used in herdr's sense.
   estate table and the campaign's frontmatter. One that doesn't exist
   is skipped, with a warning once the launch passes its guards.
 - **prepare**: an estate's optional argv command, run in the
-  campaign's workdir before any workspace is closed or created. A
-  non-zero exit, or a run past 60 seconds, refuses the launch.
+  campaign's workdir before any workspace is closed or created, with
+  no terminal to prompt on. A non-zero exit, or a run past 60 seconds,
+  refuses the launch.
 - **resume**: continue the campaign's latest conversation.
 - **fresh**: retire the latest conversation and start a new one at the
   same address, with the same paths, flags and prompts. The campaign's

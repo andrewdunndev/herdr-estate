@@ -329,9 +329,11 @@ fn run_prepare_within(
 ) -> Result<(), EstateError> {
     use std::io::Read;
     use std::os::unix::process::CommandExt;
-    let mut child = std::process::Command::new(&argv[0])
+    let mut command = std::process::Command::new(&argv[0]);
+    // SAFETY: new_session calls only setsid, which is async-signal-safe.
+    unsafe { command.pre_exec(new_session) };
+    let mut child = command
         .args(&argv[1..])
-        .process_group(0)
         .current_dir(&campaign.workdir)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -415,6 +417,20 @@ fn run_prepare_within(
         )));
     }
     progress::step(&format!("{address}: prepare ok{held_note}"));
+    Ok(())
+}
+
+// A session of its own gives prepare no terminal to be stopped on and
+// keeps it out of the verb's foreground group; as its leader, its pid
+// is still the group kill_process_group signals.
+fn new_session() -> std::io::Result<()> {
+    unsafe extern "C" {
+        fn setsid() -> i32;
+    }
+    // SAFETY: setsid takes no arguments and touches no memory of ours.
+    if unsafe { setsid() } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
     Ok(())
 }
 
@@ -1568,6 +1584,121 @@ mod tests {
                 .status();
         }
         assert!(gone, "the backgrounded sleeper {pid} outlived the timeout");
+    }
+
+    const ON_ITS_OWN_TERMINAL: &str = "ESTATE_TEST_ON_ITS_OWN_TERMINAL";
+
+    // Re-runs one test of this binary as a session leader on a fresh pty,
+    // so the prepare it spawns has a terminal to be stopped on.
+    fn rerun_on_its_own_terminal(test: &str, state_dir: &Path) -> (bool, String) {
+        use std::ffi::{c_char, c_int, c_ulong};
+        use std::io::Read;
+        use std::os::fd::AsRawFd;
+        use std::os::unix::process::CommandExt;
+        unsafe extern "C" {
+            fn grantpt(fd: c_int) -> c_int;
+            fn unlockpt(fd: c_int) -> c_int;
+            fn ptsname(fd: c_int) -> *const c_char;
+            fn setsid() -> c_int;
+            fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
+        }
+        #[cfg(target_os = "linux")]
+        const TIOCSCTTY: c_ulong = 0x540E;
+        #[cfg(not(target_os = "linux"))]
+        const TIOCSCTTY: c_ulong = 0x2000_7461;
+
+        let open = |path: &str| {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
+                .unwrap()
+        };
+        let mut master = open("/dev/ptmx");
+        let fd = master.as_raw_fd();
+        // SAFETY: fd is the open master; ptsname's buffer is copied before
+        // anything else can call it.
+        let slave_path = unsafe {
+            assert_eq!(grantpt(fd), 0);
+            assert_eq!(unlockpt(fd), 0);
+            let name = ptsname(fd);
+            assert!(!name.is_null());
+            std::ffi::CStr::from_ptr(name).to_str().unwrap().to_string()
+        };
+        let slave = open(&slave_path);
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([test, "--exact", "--test-threads=1"])
+            .env(ON_ITS_OWN_TERMINAL, "1")
+            .env("HERDR_PLUGIN_STATE_DIR", state_dir)
+            .stdin(slave.try_clone().unwrap())
+            .stdout(slave.try_clone().unwrap())
+            .stderr(slave);
+        // SAFETY: setsid and ioctl are async-signal-safe.
+        unsafe {
+            command.pre_exec(|| {
+                if setsid() == -1 || ioctl(0, TIOCSCTTY, 0 as c_int) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().unwrap();
+        drop(command);
+        let (sent, said) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut out = Vec::new();
+            let mut buf = [0u8; 4096];
+            while let Ok(n @ 1..) = master.read(&mut buf) {
+                out.extend_from_slice(&buf[..n]);
+            }
+            let _ = sent.send(out);
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                break child.wait().unwrap();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        let out = said
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap_or_default();
+        (status.success(), String::from_utf8_lossy(&out).into_owned())
+    }
+
+    #[test]
+    fn a_prepare_that_touches_the_terminal_fails_instead_of_stopping_on_it() {
+        if std::env::var_os(ON_ITS_OWN_TERMINAL).is_some() {
+            assert!(
+                std::fs::File::open("/dev/tty").is_ok(),
+                "the rerun has no terminal of its own"
+            );
+            let d = TempDir::new();
+            let campaign = prepare_campaign(d.path());
+            let err = run_prepare_within(
+                &campaign,
+                "home/garden",
+                &argv_of(&["sh", "-c", "stty -echo </dev/tty"]),
+                std::time::Duration::from_secs(10),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(&err, EstateError::Guard(m) if m.contains("prepare failed")),
+                "{err}"
+            );
+            return;
+        }
+        let d = TempDir::new();
+        let (passed, out) = rerun_on_its_own_terminal(
+            "verbs::tests::a_prepare_that_touches_the_terminal_fails_instead_of_stopping_on_it",
+            d.path(),
+        );
+        assert!(passed && out.contains("1 passed"), "{out}");
     }
 
     #[test]

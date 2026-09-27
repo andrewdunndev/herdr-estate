@@ -9,6 +9,15 @@
   workspace and started nothing. v0.2.2's fix for that press held only
   in the popup; it now holds in a pane too, where the picker reads
   `$HERDR_WORKSPACE_ID`.
+- An estate's `prepare` that touches the terminal, as
+  `stty -echo </dev/tty` does, no longer sits stopped until the
+  60-second limit refuses the launch as timed out. v0.2.2's own process
+  group left it on the verb's terminal but outside its foreground, where
+  any read or setting of that terminal stops it. `prepare` now runs in a
+  session of its own, with no terminal, so such a step fails at once
+  and the launch is refused with its error. A Ctrl-C in the terminal
+  still doesn't reach it, and a timed-out one is still killed with
+  every process it started.
 
 ## v0.2.2 - 2026-09-26
 
