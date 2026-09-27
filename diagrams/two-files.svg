@@ -18,18 +18,20 @@
     <!-- the generic estate keys -->
     <rect x="68" y="154" width="520" height="148" rx="4" fill="#ffffff" stroke="#e0e0e0" stroke-width="1"/>
     <text x="88" y="174" font-size="8" fill="#707070" font-family="Menlo, monospace" letter-spacing="0.08em">[estate.home]</text>
-    <text x="88" y="198" font-size="9" fill="#0a0a0a" font-family="Menlo, monospace">root</text>
-    <text x="212" y="198" font-size="9" fill="#707070">the repo that holds the campaigns</text>
-    <text x="88" y="216" font-size="9" fill="#0a0a0a" font-family="Menlo, monospace">campaigns</text>
-    <text x="212" y="216" font-size="9" fill="#707070">directory under root</text>
-    <text x="88" y="234" font-size="9" fill="#0a0a0a" font-family="Menlo, monospace">agent</text>
-    <text x="212" y="234" font-size="9" fill="#707070">default herdr agent kind</text>
-    <text x="88" y="252" font-size="9" fill="#0a0a0a" font-family="Menlo, monospace">paths</text>
-    <text x="212" y="252" font-size="9" fill="#707070">added ahead of the campaign's own</text>
-    <text x="88" y="270" font-size="9" fill="#0a0a0a" font-family="Menlo, monospace">prompts</text>
-    <text x="212" y="270" font-size="9" fill="#707070">appended to every agent</text>
-    <text x="88" y="288" font-size="9" fill="#0a0a0a" font-family="Menlo, monospace">env</text>
-    <text x="212" y="288" font-size="9" fill="#707070">exported into every workspace</text>
+    <text x="88" y="190" font-size="9" fill="#0a0a0a" font-family="Menlo, monospace">root</text>
+    <text x="212" y="190" font-size="9" fill="#707070">the repo that holds the campaigns; required</text>
+    <text x="88" y="206" font-size="9" fill="#0a0a0a" font-family="Menlo, monospace">campaigns</text>
+    <text x="212" y="206" font-size="9" fill="#707070">directory under root</text>
+    <text x="88" y="222" font-size="9" fill="#0a0a0a" font-family="Menlo, monospace">agent</text>
+    <text x="212" y="222" font-size="9" fill="#707070">default herdr agent kind</text>
+    <text x="88" y="238" font-size="9" fill="#0a0a0a" font-family="Menlo, monospace">paths</text>
+    <text x="212" y="238" font-size="9" fill="#707070">added ahead of the campaign's own</text>
+    <text x="88" y="254" font-size="9" fill="#0a0a0a" font-family="Menlo, monospace">prompts</text>
+    <text x="212" y="254" font-size="9" fill="#707070">appended to claude's system prompt</text>
+    <text x="88" y="270" font-size="9" fill="#0a0a0a" font-family="Menlo, monospace">env</text>
+    <text x="212" y="270" font-size="9" fill="#707070">exported into every workspace</text>
+    <text x="88" y="286" font-size="9" fill="#0a0a0a" font-family="Menlo, monospace">prepare</text>
+    <text x="212" y="286" font-size="9" fill="#707070">argv run before any close or create; failing, or past 60 s, refuses</text>
     <!-- the per-kind estate table -->
     <rect x="612" y="154" width="520" height="148" rx="4" fill="#ffffff" stroke="#e0e0e0" stroke-width="1"/>
     <text x="632" y="174" font-size="8" fill="#707070" font-family="Menlo, monospace" letter-spacing="0.08em">[estate.home.claude]</text>
@@ -46,11 +48,13 @@
     <rect x="92" y="366" width="500" height="124" rx="4" fill="#4a6741"/>
     <text x="112" y="386" font-size="8" fill="#ffffff" opacity="0.8" font-family="Menlo, monospace" letter-spacing="0.08em">FRONTMATTER</text>
     <text x="112" y="408" font-size="11" font-weight="600" fill="#ffffff">campaign.md</text>
-    <text x="112" y="430" font-size="9" fill="#ffffff" opacity="0.85" font-family="Menlo, monospace">paths:</text>
-    <text x="196" y="430" font-size="9" fill="#ffffff" opacity="0.85" font-family="Menlo, monospace">agent:</text>
-    <text x="280" y="430" font-size="9" fill="#ffffff" opacity="0.85" font-family="Menlo, monospace">claude:</text>
-    <text x="112" y="452" font-size="9" fill="#ffffff" opacity="0.85">unknown keys are ignored, not rejected</text>
-    <text x="112" y="470" font-size="9" fill="#ffffff" opacity="0.85">generic keys map through a per-kind adapter</text>
+    <text x="112" y="428" font-size="9" fill="#ffffff" opacity="0.85" font-family="Menlo, monospace">paths:</text>
+    <text x="196" y="428" font-size="9" fill="#ffffff" opacity="0.85" font-family="Menlo, monospace">agent:</text>
+    <text x="280" y="428" font-size="9" fill="#ffffff" opacity="0.85" font-family="Menlo, monospace">claude:</text>
+    <text x="364" y="428" font-size="9" fill="#ffffff" opacity="0.85" font-family="Menlo, monospace">worktree:</text>
+    <text x="112" y="446" font-size="9" fill="#ffffff" opacity="0.85">unknown keys are ignored, not rejected</text>
+    <text x="112" y="462" font-size="9" fill="#ffffff" opacity="0.85">generic keys map through a per-kind adapter</text>
+    <text x="112" y="478" font-size="9" fill="#ffffff" opacity="0.85">worktree: repo and branch, made if missing; the agent starts in it</text>
     <!-- the continuity log -->
     <rect x="616" y="366" width="492" height="124" rx="4" fill="#f4f4f4" stroke="#e0e0e0" stroke-width="1"/>
     <text x="636" y="386" font-size="8" fill="#707070" font-family="Menlo, monospace" letter-spacing="0.08em">CONTINUITY</text>
@@ -67,5 +71,5 @@
   </g>
   <line x1="20" y1="636" x2="1180" y2="636" stroke="#e0e0e0" stroke-width="1"/>
   <text x="20" y="658" font-size="10" fill="#909090">generic estate keys, then per-kind, then campaign.md overrides key by key.</text>
-  <text x="1180" y="658" text-anchor="end" font-size="10" fill="#909090">src/config.rs</text>
+  <text x="1180" y="658" text-anchor="end" font-size="10" fill="#909090">src/campaign.rs</text>
 </svg>
