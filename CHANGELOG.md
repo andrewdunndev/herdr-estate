@@ -18,6 +18,10 @@
   and the launch is refused with its error. A Ctrl-C in the terminal
   still doesn't reach it, and a timed-out one is still killed with
   every process it started.
+- A failed `prepare` that left a process holding its output open is
+  refused with what it wrote before it exited, where only its exit
+  status was named. What had already been read was dropped while the
+  launch waited for the pipe to close.
 
 ## v0.2.2 - 2026-09-26
 

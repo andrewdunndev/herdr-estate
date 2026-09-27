@@ -346,15 +346,33 @@ fn run_prepare_within(
                 campaign.workdir.display()
             ))
         })?;
-    let (sent, drained) = std::sync::mpsc::channel::<(usize, Vec<u8>)>();
+    let read_so_far: [std::sync::Arc<std::sync::Mutex<Vec<u8>>>; 2] = Default::default();
+    let bytes_of = |which: usize| {
+        let mut bytes = read_so_far[which]
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::mem::take(&mut *bytes)
+    };
+    let (closed, closes) = std::sync::mpsc::channel::<()>();
     let drain = |which: usize, pipe: Option<Box<dyn Read + Send>>| {
-        let sent = sent.clone();
+        let closed = closed.clone();
+        let bytes = std::sync::Arc::clone(&read_so_far[which]);
         std::thread::spawn(move || {
-            let mut bytes = Vec::new();
+            let mut chunk = [0; 8192];
             if let Some(mut pipe) = pipe {
-                let _ = pipe.read_to_end(&mut bytes);
+                loop {
+                    match pipe.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => bytes
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .extend_from_slice(&chunk[..n]),
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(_) => break,
+                    }
+                }
             }
-            let _ = sent.send((which, bytes));
+            let _ = closed.send(());
         });
     };
     drain(
@@ -390,20 +408,19 @@ fn run_prepare_within(
     };
     let grace = PREPARE_PIPE_GRACE.min(timeout.saturating_sub(started.elapsed()));
     let grace_ends = std::time::Instant::now() + grace;
-    let mut pipes: [Option<Vec<u8>>; 2] = [None, None];
-    while pipes.iter().any(Option::is_none) {
+    let mut open = read_so_far.len();
+    while open > 0 {
         let left = grace_ends.saturating_duration_since(std::time::Instant::now());
-        match drained.recv_timeout(left) {
-            Ok((which, bytes)) => pipes[which] = Some(bytes),
+        match closes.recv_timeout(left) {
+            Ok(()) => open -= 1,
             Err(_) => break,
         }
     }
-    let held_open = pipes.iter().any(Option::is_none);
-    let [stdout, stderr] = pipes;
+    let held_open = open > 0;
     let output = std::process::Output {
         status,
-        stdout: stdout.unwrap_or_default(),
-        stderr: stderr.unwrap_or_default(),
+        stdout: bytes_of(0),
+        stderr: bytes_of(1),
     };
     let held_note = if held_open {
         " (its output held open by a process it left running)"
@@ -1528,24 +1545,29 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_prepare_whose_pipes_stay_open_names_its_exit_and_why_it_says_no_more() {
+    fn a_failed_prepare_whose_pipes_stay_open_names_what_it_said_and_why_it_says_no_more() {
         let d = crate::test_support::TempDir::new();
         let _g = crate::test_support::EnvGuard::set(&[(
             "HERDR_PLUGIN_STATE_DIR",
             d.path().to_str().unwrap(),
         )]);
         let campaign = prepare_campaign(d.path());
-        let err = run_prepare_within(
-            &campaign,
-            "home/garden",
-            &argv_of(&["sh", "-c", "echo boom >&2; sleep 30 & exit 3"]),
-            std::time::Duration::from_secs(20),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(&err, EstateError::Guard(m) if m.contains("exit status: 3") && m.ends_with("held open by a process it left running)")),
-            "{err}"
-        );
+        for (script, said) in [
+            ("echo boom >&2; sleep 30 & exit 3", "prepare failed: boom ("),
+            ("sleep 30 & exit 3", "exit status: 3"),
+        ] {
+            let err = run_prepare_within(
+                &campaign,
+                "home/garden",
+                &argv_of(&["sh", "-c", script]),
+                std::time::Duration::from_secs(20),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(&err, EstateError::Guard(m) if m.contains(said) && m.ends_with("held open by a process it left running)")),
+                "{script}: {err}"
+            );
+        }
     }
 
     #[test]
