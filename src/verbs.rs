@@ -330,10 +330,12 @@ fn run_prepare_within(
     use std::io::Read;
     use std::os::unix::process::CommandExt;
     let mut command = std::process::Command::new(&argv[0]);
-    // SAFETY: new_session calls only setsid, which is async-signal-safe.
-    unsafe { command.pre_exec(new_session) };
+    // SAFETY: drop_controlling_terminal makes only open, ioctl and close
+    // calls, and allocates nothing.
+    unsafe { command.pre_exec(drop_controlling_terminal) };
     let mut child = command
         .args(&argv[1..])
+        .process_group(0)
         .current_dir(&campaign.workdir)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -437,16 +439,40 @@ fn run_prepare_within(
     Ok(())
 }
 
-// A session of its own gives prepare no terminal to be stopped on and
-// keeps it out of the verb's foreground group; as its leader, its pid
-// is still the group kill_process_group signals.
-fn new_session() -> std::io::Result<()> {
+// prepare's own process group, the one kill_process_group signals, is
+// outside the verb's foreground, where touching the terminal stops a
+// process. Without the terminal such a step fails at once; TIOCNOTTY
+// from a non-leader drops it for this process alone, leaving prepare in
+// the verb's session, which herdr signals when it closes the pane.
+fn drop_controlling_terminal() -> std::io::Result<()> {
+    use std::ffi::{c_char, c_int, c_ulong};
     unsafe extern "C" {
-        fn setsid() -> i32;
+        fn open(path: *const c_char, flags: c_int, ...) -> c_int;
+        fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
+        fn close(fd: c_int) -> c_int;
     }
-    // SAFETY: setsid takes no arguments and touches no memory of ours.
-    if unsafe { setsid() } == -1 {
-        return Err(std::io::Error::last_os_error());
+    const O_RDWR: c_int = 2;
+    #[cfg(target_os = "linux")]
+    const O_NOCTTY: c_int = 0o400;
+    #[cfg(not(target_os = "linux"))]
+    const O_NOCTTY: c_int = 0x2_0000;
+    #[cfg(target_os = "linux")]
+    const TIOCNOTTY: c_ulong = 0x5422;
+    #[cfg(not(target_os = "linux"))]
+    const TIOCNOTTY: c_ulong = 0x2000_7471;
+    // SAFETY: the path is a NUL-terminated literal, and the fd is the one
+    // open just returned.
+    unsafe {
+        let tty = open(c"/dev/tty".as_ptr(), O_RDWR | O_NOCTTY);
+        if tty == -1 {
+            return Ok(());
+        }
+        let dropped = ioctl(tty, TIOCNOTTY);
+        let err = std::io::Error::last_os_error();
+        close(tty);
+        if dropped == -1 {
+            return Err(err);
+        }
     }
     Ok(())
 }
@@ -1705,7 +1731,7 @@ mod tests {
             let err = run_prepare_within(
                 &campaign,
                 "home/garden",
-                &argv_of(&["sh", "-c", "stty -echo </dev/tty"]),
+                &argv_of(&["sh", "-c", "stty -echo </dev/tty; exit $?"]),
                 std::time::Duration::from_secs(10),
             )
             .unwrap_err();
@@ -1721,6 +1747,50 @@ mod tests {
             d.path(),
         );
         assert!(passed && out.contains("1 passed"), "{out}");
+    }
+
+    const PRINT_ITS_SESSION: &str = "ESTATE_TEST_PRINT_ITS_SESSION";
+
+    fn this_session() -> i32 {
+        unsafe extern "C" {
+            fn getsid(pid: i32) -> i32;
+        }
+        // SAFETY: getsid(0) reads the caller's session id and nothing else.
+        unsafe { getsid(0) }
+    }
+
+    #[test]
+    fn a_prepare_stays_in_the_verbs_session_where_a_pane_close_reaches_it() {
+        if std::env::var_os(PRINT_ITS_SESSION).is_some() {
+            eprintln!("session {}", this_session());
+            std::process::exit(1);
+        }
+        let d = TempDir::new();
+        let _g = crate::test_support::EnvGuard::set(&[(
+            "HERDR_PLUGIN_STATE_DIR",
+            d.path().to_str().unwrap(),
+        )]);
+        let campaign = prepare_campaign(d.path());
+        let exe = std::env::current_exe().unwrap();
+        let err = run_prepare_within(
+            &campaign,
+            "home/garden",
+            &argv_of(&[
+                "env",
+                &format!("{PRINT_ITS_SESSION}=1"),
+                exe.to_str().unwrap(),
+                "verbs::tests::a_prepare_stays_in_the_verbs_session_where_a_pane_close_reaches_it",
+                "--exact",
+                "--nocapture",
+            ]),
+            std::time::Duration::from_secs(30),
+        )
+        .unwrap_err();
+        let expected = format!("prepare failed: session {}", this_session());
+        assert!(
+            matches!(&err, EstateError::Guard(m) if m.ends_with(&expected)),
+            "{err}"
+        );
     }
 
     #[test]
