@@ -43,11 +43,12 @@ puts `herdr-estate` on your PATH.
 
 ## Configure
 
-![estates.toml lives in herdr's plugin config dir; campaigns live under the estate root; logs, ownership, prompts, worktrees and locks live in the plugin's state dir.](diagrams/files.svg)
+![estates.toml lives in herdr's plugin config dir; campaigns live under the estate root; the run log, ownership, prompts, worktrees and locks live in the plugin's state dir.](diagrams/files.svg)
 
 ![An address names one estate table and one campaign directory, whose campaign.md sets the agent, its flags, paths and worktree.](diagrams/two-files.svg)
 
 ```toml
+# estates.toml
 [estate.home]
 root = "~/estates/home"
 ```
