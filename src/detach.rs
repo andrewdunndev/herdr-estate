@@ -165,23 +165,24 @@ pub fn hand_off(action: RowAction, address: &str, workspace_id: &str) -> Result<
     wait_for_run(&plugin_id, log_id, &production_wait()).map_err(pinned)
 }
 
-const TESTED_HERDR: &str = "0.9.1";
+const TESTED_HERDR: &str = "0.9.3";
+const MIN_HERDR: &str = "0.9.1";
 const MIN_PROTOCOL: u64 = 22;
 
 fn check_protocol() -> Result<String, EstateError> {
     let pong = herdrcli::call_api("ping", serde_json::json!({})).map_err(|e| {
         EstateError::Protocol(format!(
-            "{e}; the picker's hand-off needs protocol {MIN_PROTOCOL} (herdr {TESTED_HERDR}+)"
+            "{e}; the picker's hand-off needs protocol {MIN_PROTOCOL} (herdr {MIN_HERDR}+)"
         ))
     })?;
     let version = pong["version"].as_str().unwrap_or("of unknown version");
     match pong["protocol"].as_u64() {
         Some(protocol) if protocol >= MIN_PROTOCOL => Ok(format!("herdr {version}, protocol {protocol}")),
         Some(protocol) => Err(EstateError::Protocol(format!(
-            "herdr {version} speaks API protocol {protocol}; the picker's hand-off needs protocol {MIN_PROTOCOL} or later (herdr {TESTED_HERDR}+). Upgrade herdr"
+            "herdr {version} speaks API protocol {protocol}; the picker's hand-off needs protocol {MIN_PROTOCOL} or later (herdr {MIN_HERDR}+). Upgrade herdr"
         ))),
         None => Err(EstateError::Protocol(format!(
-            "herdr's ping reply named no API protocol; the picker's hand-off needs protocol {MIN_PROTOCOL} (herdr {TESTED_HERDR}+)"
+            "herdr's ping reply named no API protocol; the picker's hand-off needs protocol {MIN_PROTOCOL} (herdr {MIN_HERDR}+)"
         ))),
     }
 }
@@ -461,7 +462,7 @@ mod tests {
         (path, served)
     }
 
-    const PONG: &str = r#"{"id":"x","result":{"type":"pong","version":"0.9.1","protocol":22}}"#;
+    const PONG: &str = r#"{"id":"x","result":{"type":"pong","version":"0.9.3","protocol":22}}"#;
 
     fn fake_api(reply: &'static str) -> (std::path::PathBuf, std::thread::JoinHandle<String>) {
         let (path, served) = fake_api_seq(vec![PONG.to_string(), reply.to_string()]);
@@ -742,12 +743,12 @@ mod tests {
             r#"{"id":"","error":{"code":"invalid_request","message":"invalid request: unknown variant `plugin.action.invoke`"}}"#,
         ]);
         assert!(
-            matches!(&err, EstateError::Protocol(m) if m.contains("unknown variant") && m.contains("herdr 0.10.0, protocol 23") && m.contains("built against herdr 0.9.1, protocol 22")),
+            matches!(&err, EstateError::Protocol(m) if m.contains("unknown variant") && m.contains("herdr 0.10.0, protocol 23") && m.contains("built against herdr 0.9.3, protocol 22")),
             "{err}"
         );
         let (err, _, _) = hand_off_against(&[PONG, r#"{"id":"x","result":{"type":"ok"}}"#]);
         assert!(
-            matches!(&err, EstateError::Protocol(m) if m.contains("named no log entry") && m.contains("herdr 0.9.1, protocol 22")),
+            matches!(&err, EstateError::Protocol(m) if m.contains("named no log entry") && m.contains("herdr 0.9.3, protocol 22")),
             "{err}"
         );
     }

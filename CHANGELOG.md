@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Tested against herdr 0.9.3, which changes none of the commands,
+  replies or paths the plugin uses. It still needs herdr 0.9.1 or later.
+
 ## v0.2.3 - 2026-09-27
 
 - The picker run from a pane's shell now hands a row for its own
