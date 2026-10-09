@@ -4,6 +4,10 @@
 
 - Tested against herdr 0.9.3, which changes none of the commands,
   replies or paths the plugin uses. It still needs herdr 0.9.1 or later.
+- A new workspace now puts herdr's workspace list in label order: `~`
+  first, the rest ignoring case. The manifest runs the new `sort` verb
+  on herdr's `workspace.created` event; it moves only the workspaces out
+  of place, and a move herdr refuses is logged and the rest left as is.
 
 ## v0.2.3 - 2026-09-27
 

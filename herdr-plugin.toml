@@ -50,6 +50,10 @@ title = "Picker hand-off: stop and fresh"
 contexts = []
 command = ["target/release/herdr-estate", "pick", "--dispatch", "stop"]
 
+[[events]]
+on = "workspace.created"
+command = ["target/release/herdr-estate", "sort"]
+
 [[panes]]
 id = "picker"
 title = "campaigns"

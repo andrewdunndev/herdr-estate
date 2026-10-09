@@ -4,6 +4,7 @@ use crate::dispatch;
 use crate::errors::EstateError;
 use crate::picker;
 use crate::progress;
+use crate::sort;
 use crate::verbs;
 
 pub const PICK_DEFAULT_WIDTH: usize = 80;
@@ -24,6 +25,9 @@ usage: herdr-estate <verb> [options]
                                     opens as a popup
   pick --render-once [--width <n>] [--height <n>]
                                     print one frame, 80x20 by default
+  sort                              order herdr's workspaces by label,
+                                    ~ first; herdr runs it on every
+                                    new workspace
 
 With no address, the current workspace's label is used; --dry-run
 prints the plan, changes nothing, and needs an address.
@@ -56,6 +60,7 @@ pub enum Command {
     PickDispatch {
         action: RowAction,
     },
+    Sort,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,19 +94,23 @@ pub fn parse_args(argv: &[String]) -> Result<Command, ParseError> {
                 Ok(Command::Fresh { address, dry_run })
             }
         }
-        "list" => {
+        "list" | "sort" => {
             if !rest.is_empty() {
                 return Err(ParseError {
                     message: format!("unrecognized arguments: {}", rest.join(" ")),
                 });
             }
-            Ok(Command::List)
+            Ok(if verb == "list" {
+                Command::List
+            } else {
+                Command::Sort
+            })
         }
         "create" => parse_create(rest),
         "pick" => parse_pick(rest),
         other => Err(ParseError {
             message: format!(
-                "argument verb: invalid choice: {other:?} (choose from 'resume', 'fresh', 'list', 'create', 'pick')"
+                "argument verb: invalid choice: {other:?} (choose from 'resume', 'fresh', 'list', 'create', 'pick', 'sort')"
             ),
         }),
     }
@@ -269,6 +278,7 @@ fn dispatch(cmd: Command) -> Result<i32, EstateError> {
             let addr = detach::context_address()?;
             dispatch::run_action(&estates, action, &addr).map(|()| 0)
         }
+        Command::Sort => Ok(sort::run()),
     }
 }
 
@@ -368,6 +378,13 @@ mod tests {
         assert_eq!(parse_args(&args(&["list"])).unwrap(), Command::List);
         assert!(parse_args(&args(&["list", "--dry-run"])).is_err());
         assert!(parse_args(&args(&["list", "home/garden"])).is_err());
+    }
+
+    #[test]
+    fn parse_sort_takes_no_arguments() {
+        assert_eq!(parse_args(&args(&["sort"])).unwrap(), Command::Sort);
+        assert!(parse_args(&args(&["sort", "--dry-run"])).is_err());
+        assert!(parse_args(&args(&["sort", "home/garden"])).is_err());
     }
 
     #[test]

@@ -6,8 +6,8 @@ use std::time::Duration;
 use crate::errors::EstateError;
 use crate::paths::state_dir;
 
-const OWNED_WAIT: Duration = Duration::from_secs(10);
-const OWNED_POLL: Duration = Duration::from_millis(50);
+const HOLD_WAIT: Duration = Duration::from_secs(10);
+const HOLD_POLL: Duration = Duration::from_millis(50);
 
 #[derive(Debug)]
 pub struct FileLock {
@@ -21,6 +21,10 @@ fn lock_path(address: &str) -> PathBuf {
 
 fn owned_lock_path() -> PathBuf {
     state_dir().join("owned.lock")
+}
+
+fn sort_lock_path() -> PathBuf {
+    state_dir().join("sort.lock")
 }
 
 fn try_take(path: &Path) -> Result<Option<FileLock>, EstateError> {
@@ -72,18 +76,25 @@ pub fn acquire(address: &str) -> Result<FileLock, EstateError> {
 }
 
 pub fn hold_owned() -> std::io::Result<FileLock> {
-    let path = owned_lock_path();
-    let gives_up = std::time::Instant::now() + OWNED_WAIT;
+    hold(&owned_lock_path())
+}
+
+pub fn hold_sort() -> std::io::Result<FileLock> {
+    hold(&sort_lock_path())
+}
+
+fn hold(path: &Path) -> std::io::Result<FileLock> {
+    let gives_up = std::time::Instant::now() + HOLD_WAIT;
     loop {
-        match try_take(&path) {
+        match try_take(path) {
             Ok(Some(lock)) => return Ok(lock),
-            Ok(None) if std::time::Instant::now() < gives_up => std::thread::sleep(OWNED_POLL),
+            Ok(None) if std::time::Instant::now() < gives_up => std::thread::sleep(HOLD_POLL),
             Ok(None) => {
                 return Err(std::io::Error::other(format!(
                     "{} is still held{} after {}s",
                     path.display(),
-                    holder(&path),
-                    OWNED_WAIT.as_secs()
+                    holder(path),
+                    HOLD_WAIT.as_secs()
                 )))
             }
             Err(e) => return Err(std::io::Error::other(e.to_string())),
@@ -154,6 +165,22 @@ mod tests {
         let waiter = std::thread::spawn(|| {
             let started = std::time::Instant::now();
             drop(hold_owned().unwrap());
+            started.elapsed()
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        drop(held);
+        assert!(waiter.join().unwrap() >= Duration::from_millis(150));
+    }
+
+    #[test]
+    fn a_held_sort_lock_makes_a_second_sort_wait_and_never_blocks_owned() {
+        let (d, _g) = isolated();
+        let held = hold_sort().unwrap();
+        assert!(d.path().join("sort.lock").exists());
+        drop(hold_owned().unwrap());
+        let waiter = std::thread::spawn(|| {
+            let started = std::time::Instant::now();
+            drop(hold_sort().unwrap());
             started.elapsed()
         });
         std::thread::sleep(Duration::from_millis(200));

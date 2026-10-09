@@ -269,8 +269,7 @@ mod tests {
     use super::*;
     use crate::herdrcli::AgentStatus;
     use crate::picker::core::Row;
-    use crate::test_support::{EnvGuard, FakeHerdr, TempDir};
-    use std::io::{BufRead, BufReader, Write};
+    use crate::test_support::{fake_api_seq, EnvGuard, FakeHerdr, TempDir};
 
     fn live(workspace_id: &str) -> Row {
         Row {
@@ -433,33 +432,6 @@ mod tests {
             );
             assert!(entry["contexts"].as_array().unwrap().is_empty());
         }
-    }
-
-    fn fake_api_seq(
-        replies: Vec<String>,
-    ) -> (std::path::PathBuf, std::thread::JoinHandle<Vec<String>>) {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static N: AtomicU64 = AtomicU64::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "he-api-{}-{}.sock",
-            std::process::id(),
-            N.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = std::fs::remove_file(&path);
-        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
-        let served = std::thread::spawn(move || {
-            replies
-                .iter()
-                .map(|reply| {
-                    let (stream, _) = listener.accept().unwrap();
-                    let mut line = String::new();
-                    BufReader::new(&stream).read_line(&mut line).unwrap();
-                    writeln!(&stream, "{reply}").unwrap();
-                    line
-                })
-                .collect()
-        });
-        (path, served)
     }
 
     const PONG: &str = r#"{"id":"x","result":{"type":"pong","version":"0.9.3","protocol":22}}"#;

@@ -64,7 +64,9 @@ root = "~/estates/home"
 ![Both verbs read the workspace list first and refuse on a duplicate label, a running agent, a workspace they didn't create or an unconfirmed close.](diagrams/verbs.svg)
 
 `herdr-estate --help` lists the verbs and their flags, and
-[docs/events.md](docs/events.md) the progress lines they print.
+[docs/events.md](docs/events.md) the progress lines they print. herdr
+runs `sort` on every new workspace, keeping the workspace list in label
+order, `~` first.
 
 ## Develop
 

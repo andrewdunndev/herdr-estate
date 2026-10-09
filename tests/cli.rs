@@ -66,13 +66,44 @@ fn help_prints_every_verb_and_writes_no_events_log() {
         let text = stdout(&out);
         assert!(text.starts_with("usage: herdr-estate <verb>"), "{text}");
         for verb in [
-            "resume", "fresh", "list", "create", "pick", "--width", "--height",
+            "resume", "fresh", "list", "create", "pick", "sort", "--width", "--height",
         ] {
             assert!(text.contains(verb), "{verb} missing from {text}");
         }
         assert_eq!(f.fake.call_count(), 0);
         assert!(!f.state_dir.join("events.log").exists());
     }
+}
+
+#[test]
+fn sort_outside_herdr_fails_naming_the_socket_and_needs_no_estate_table() {
+    let (f, _root) = fixture();
+    std::fs::remove_file(f.config_dir.join("estates.toml")).unwrap();
+    let out = run(&f, &["sort"], &[]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("sort: workspace.list: $HERDR_SOCKET_PATH is unset"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(f.fake.call_count(), 0);
+}
+
+#[test]
+fn sort_as_a_created_hook_that_cannot_reach_herdr_exits_0_and_logs_it() {
+    let (f, _root) = fixture();
+    let out = run(
+        &f,
+        &["sort"],
+        &[("HERDR_PLUGIN_EVENT", "workspace.created")],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let log = std::fs::read_to_string(f.state_dir.join("events.log")).unwrap();
+    assert!(
+        log.contains("run: herdr-estate sort (herdr event workspace.created)"),
+        "{log}"
+    );
+    assert!(log.contains("error: sort: workspace.list:"), "{log}");
 }
 
 #[test]

@@ -30,6 +30,14 @@ When a dispatch from the picker fails, the popup stays open on the error
 until a key press. Keys typed during the wait are discarded first, so
 they can't dismiss it unread.
 
+`sort`, which herdr runs on every new workspace, says one line: how
+many workspaces it moved into label order, or why it stopped. As
+herdr's hook it never fails, so a move herdr refuses is only logged:
+
+```
+herdr-estate: sort: moved 1 workspace into label order
+```
+
 `--dry-run`, and any refusal made before something changes, print no
 progress lines. A close that can't be confirmed is refused after its
 `closing` line, and nothing is created. A `paths` entry that isn't

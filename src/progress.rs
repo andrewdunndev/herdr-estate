@@ -34,6 +34,9 @@ pub fn launched_via() -> String {
     if let Some(id) = non_empty_env("HERDR_PLUGIN_ENTRYPOINT_ID") {
         return format!("herdr pane {id}");
     }
+    if let Some(event) = non_empty_env("HERDR_PLUGIN_EVENT") {
+        return format!("herdr event {event}");
+    }
     "shell".to_string()
 }
 
@@ -165,8 +168,21 @@ mod tests {
     }
 
     #[test]
-    fn launched_via_is_shell_when_herdr_set_neither() {
-        let _g = EnvGuard::unset(&["HERDR_PLUGIN_ACTION_ID", "HERDR_PLUGIN_ENTRYPOINT_ID"]);
+    fn launched_via_names_an_event_hook() {
+        let _g = EnvGuard::new(
+            &[("HERDR_PLUGIN_EVENT", "workspace.created")],
+            &["HERDR_PLUGIN_ACTION_ID", "HERDR_PLUGIN_ENTRYPOINT_ID"],
+        );
+        assert_eq!(launched_via(), "herdr event workspace.created");
+    }
+
+    #[test]
+    fn launched_via_is_shell_when_herdr_set_none() {
+        let _g = EnvGuard::unset(&[
+            "HERDR_PLUGIN_ACTION_ID",
+            "HERDR_PLUGIN_ENTRYPOINT_ID",
+            "HERDR_PLUGIN_EVENT",
+        ]);
         assert_eq!(launched_via(), "shell");
     }
 }
