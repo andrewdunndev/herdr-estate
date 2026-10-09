@@ -66,7 +66,8 @@ root = "~/estates/home"
 `herdr-estate --help` lists the verbs and their flags, and
 [docs/events.md](docs/events.md) the progress lines they print. herdr
 runs `sort` on every new workspace, keeping the workspace list in label
-order, `~` first.
+order, `~` first; the picker's Sort spaces row and the
+`herdr-estate.sort` action run it on demand.
 
 ## Develop
 

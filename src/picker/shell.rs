@@ -27,6 +27,7 @@ use crate::picker::core::{
 use crate::picker::rows;
 use crate::picker::theme::{self, Palette};
 use crate::progress;
+use crate::sort;
 
 struct RestoreGuard {
     restore: fn(),
@@ -256,7 +257,13 @@ fn run_interactive(state: AppState, look: (Palette, Indicators)) -> Result<Outco
     let _guard = RestoreGuard::new();
     ratatui::crossterm::execute!(std::io::stdout(), EnableBracketedPaste)
         .map_err(|e| EstateError::Protocol(format!("could not start the terminal: {e}")))?;
-    event_loop(&mut terminal, state, &mut CrosstermEvents, look)
+    event_loop(
+        &mut terminal,
+        state,
+        &mut CrosstermEvents,
+        look,
+        &mut sort::in_picker,
+    )
 }
 
 trait EventSource {
@@ -316,6 +323,7 @@ fn event_loop<B: ratatui::backend::Backend>(
     mut state: AppState,
     events: &mut impl EventSource,
     (palette, ind): (Palette, Indicators),
+    sort: &mut impl FnMut() -> String,
 ) -> Result<Outcome, EstateError> {
     loop {
         terminal
@@ -363,6 +371,9 @@ fn event_loop<B: ratatui::backend::Backend>(
             _ => {}
         }
 
+        if state.sort_requested {
+            state = state.sorted(sort());
+        }
         if let Some(outcome) = state.done.clone() {
             return Ok(outcome);
         }
@@ -482,6 +493,81 @@ mod event_loop_tests {
 
     fn catppuccin() -> (Palette, Indicators) {
         (Palette::catppuccin(), Indicators::Dots)
+    }
+
+    fn event_loop<B: ratatui::backend::Backend>(
+        terminal: &mut ratatui::Terminal<B>,
+        state: AppState,
+        events: &mut impl EventSource,
+        look: (Palette, Indicators),
+    ) -> Result<Outcome, EstateError> {
+        super::event_loop(terminal, state, events, look, &mut || -> String {
+            panic!("this test never selects Sort spaces")
+        })
+    }
+
+    fn screen_text(terminal: &ratatui::Terminal<TestBackend>) -> String {
+        let buf = terminal.backend().buffer();
+        let area = buf.area;
+        (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn enter_on_sort_spaces_sorts_and_keeps_the_picker_open_showing_the_outcome() {
+        let mut terminal = ratatui::Terminal::new(TestBackend::new(60, 10)).unwrap();
+        let mut script: Vec<Scripted> = "sort"
+            .chars()
+            .map(|c| Scripted::Event(key_press(KeyCode::Char(c))))
+            .collect();
+        script.push(Scripted::Event(key_press(KeyCode::Enter)));
+        script.push(Scripted::Event(key_press(KeyCode::Esc)));
+        let mut events = ScriptedEvents::new(script);
+        let mut sorts = 0;
+        let outcome = super::event_loop(
+            &mut terminal,
+            AppState::new(one_row()),
+            &mut events,
+            catppuccin(),
+            &mut || {
+                sorts += 1;
+                "moved 1 workspace into label order".to_string()
+            },
+        )
+        .unwrap();
+        assert_eq!(outcome, Outcome::Cancelled);
+        assert!(events.0.is_empty());
+        assert_eq!(sorts, 1);
+        let text = screen_text(&terminal);
+        assert!(text.contains("Sort spaces"), "{text}");
+        assert!(
+            text.contains("moved 1 workspace into label order"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn ctrl_f_on_sort_spaces_neither_sorts_nor_closes() {
+        let mut terminal = test_terminal();
+        let mut events = ScriptedEvents::new(vec![
+            Scripted::Event(key_press(KeyCode::Down)),
+            Scripted::Event(ctrl_key_press('f')),
+            Scripted::Event(key_press(KeyCode::Esc)),
+        ]);
+        let outcome = event_loop(
+            &mut terminal,
+            AppState::new(one_row()),
+            &mut events,
+            catppuccin(),
+        )
+        .unwrap();
+        assert_eq!(outcome, Outcome::Cancelled);
     }
 
     #[test]

@@ -38,6 +38,9 @@ herdr's hook it never fails, so a move herdr refuses is only logged:
 herdr-estate: sort: moved 1 workspace into label order
 ```
 
+The picker's Sort spaces row shows that line in its detail line and
+stays open; it writes nothing to stderr, only to `events.log`.
+
 `--dry-run`, and any refusal made before something changes, print no
 progress lines. A close that can't be confirmed is refused after its
 `closing` line, and nothing is created. A `paths` entry that isn't

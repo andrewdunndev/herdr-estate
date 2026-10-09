@@ -8,6 +8,10 @@
   first, the rest ignoring case. The manifest runs the new `sort` verb
   on herdr's `workspace.created` event; it moves only the workspaces out
   of place, and a move herdr refuses is logged and the rest left as is.
+- Sort spaces runs the same sort on demand: a row at the foot of the
+  picker (type `sort` to reach it), which keeps the picker open and
+  shows what it did, and the manifest action `herdr-estate.sort` for a
+  key binding.
 
 ## v0.2.3 - 2026-09-27
 

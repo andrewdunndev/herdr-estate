@@ -105,33 +105,53 @@ pub fn run() -> i32 {
     run_on(&mut Socket)
 }
 
+pub fn in_picker() -> String {
+    in_picker_on(&mut Socket)
+}
+
+fn in_picker_on(board: &mut impl Board) -> String {
+    match sort_locked(board) {
+        Ok(line) => {
+            progress::append(&format!("sort: {line}"));
+            line
+        }
+        Err(line) => {
+            progress::append(&format!("error: sort: {line}"));
+            format!("sort stopped: {line}")
+        }
+    }
+}
+
 fn run_on(board: &mut impl Board) -> i32 {
     let hook = non_empty_env("HERDR_PLUGIN_EVENT");
     if let Some(event) = hook.as_deref().filter(|e| *e != HOOK_EVENT) {
         progress::append(&format!("sort: not run for {event}, only {HOOK_EVENT}"));
         return 0;
     }
-    let sorted = lock::hold_sort()
-        .map_err(|e| EstateError::Guard(e.to_string()))
-        .and_then(|_held| sort_board(board));
-    match sorted {
-        Ok(0) => {
-            progress::step("sort: the workspaces are already in label order");
+    match sort_locked(board) {
+        Ok(line) => {
+            progress::step(&format!("sort: {line}"));
             0
         }
-        Ok(moves) => {
-            progress::step(&format!("sort: moved {} into label order", count(moves)));
-            0
-        }
-        Err(e) => {
-            let message: String = e.to_string().chars().take(MESSAGE_CAP).collect();
-            progress::report_error(&format!("sort: {message}"));
+        Err(line) => {
+            progress::report_error(&format!("sort: {line}"));
             if hook.is_some() {
                 0
             } else {
                 1
             }
         }
+    }
+}
+
+fn sort_locked(board: &mut impl Board) -> Result<String, String> {
+    let sorted = lock::hold_sort()
+        .map_err(|e| EstateError::Guard(e.to_string()))
+        .and_then(|_held| sort_board(board));
+    match sorted {
+        Ok(0) => Ok("the workspaces are already in label order".to_string()),
+        Ok(moves) => Ok(format!("moved {} into label order", count(moves))),
+        Err(e) => Err(e.to_string().chars().take(MESSAGE_CAP).collect()),
     }
 }
 
@@ -389,6 +409,60 @@ mod tests {
             progress::logged_messages(),
             vec!["sort: moved 1 workspace into label order"]
         );
+    }
+
+    #[test]
+    fn the_picker_gets_the_outcome_as_a_line_and_nothing_on_stderr_reaches_it() {
+        let (_d, _g) = isolated(&[]);
+        let mut herdr = Herdr::new(vec![slot("w2", "bravo"), slot("w1", "~")]);
+        assert_eq!(
+            in_picker_on(&mut herdr),
+            "moved 1 workspace into label order"
+        );
+        assert_eq!(
+            in_picker_on(&mut herdr),
+            "the workspaces are already in label order"
+        );
+        assert_eq!(
+            progress::logged_messages(),
+            vec![
+                "sort: moved 1 workspace into label order",
+                "sort: the workspaces are already in label order",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_refused_move_in_the_picker_is_a_line_to_show_not_a_failure() {
+        let (_d, _g) = isolated(&[]);
+        let mut herdr = Herdr::new(vec![slot("w2", "bravo"), slot("w1", "~")]);
+        herdr.refuse_move = Some(0);
+        let line = in_picker_on(&mut herdr);
+        assert!(
+            line.starts_with("sort stopped: workspace.move: unknown variant"),
+            "{line}"
+        );
+        assert!(progress::logged_messages()[0].starts_with("error: sort: workspace.move:"));
+    }
+
+    #[test]
+    fn the_manifest_offers_sort_as_an_action() {
+        let text = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/herdr-plugin.toml"));
+        let manifest: toml::Table = toml::from_str(text).unwrap();
+        let action = manifest["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"].as_str() == Some("sort"))
+            .expect("no manifest action sort");
+        assert_eq!(action["title"].as_str(), Some("Sort spaces"));
+        let command: Vec<&str> = action["command"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(command, vec!["target/release/herdr-estate", "sort"]);
     }
 
     #[test]

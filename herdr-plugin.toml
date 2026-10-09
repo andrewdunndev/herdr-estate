@@ -33,6 +33,12 @@ contexts = ["workspace"]
 command = ["target/release/herdr-estate", "pick"]
 
 [[actions]]
+id = "sort"
+title = "Sort spaces"
+contexts = ["workspace"]
+command = ["target/release/herdr-estate", "sort"]
+
+[[actions]]
 id = "dispatch-open"
 title = "Picker hand-off: open"
 contexts = []

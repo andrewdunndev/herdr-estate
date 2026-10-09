@@ -60,7 +60,12 @@ pub enum Outcome {
 enum Selection {
     Row(String),
     Create,
+    Sort,
 }
+
+pub const SORT_LABEL: &str = "Sort spaces";
+
+const SORT_HINT: &str = "order herdr's workspaces by label, ~ first · enter";
 
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -71,7 +76,21 @@ pub struct AppState {
     brief: Option<String>,
     brief_wanted: bool,
     armed: Option<String>,
+    sort_note: Option<String>,
+    pub sort_requested: bool,
     pub done: Option<Outcome>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Extras {
+    creates: bool,
+    sorts: bool,
+}
+
+impl Extras {
+    fn items(self, rows: usize) -> usize {
+        rows + usize::from(self.creates) + usize::from(self.sorts)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -99,12 +118,22 @@ impl AppState {
             brief: None,
             brief_wanted: false,
             armed: None,
+            sort_note: None,
+            sort_requested: false,
             done: None,
         }
     }
 
     pub fn with_estates(self, estates: BTreeMap<String, String>) -> Self {
         AppState { estates, ..self }
+    }
+
+    pub fn sorted(self, note: String) -> Self {
+        AppState {
+            sort_note: Some(note),
+            sort_requested: false,
+            ..self
+        }
     }
 
     pub fn filtered(&self) -> Vec<&Row> {
@@ -126,19 +155,37 @@ impl AppState {
     fn creates(&self) -> bool {
         self.filter.contains('/') && self.create_refusal().is_none()
     }
-}
 
-fn current_index(filtered: &[&Row], selected: &Option<Selection>) -> Option<usize> {
-    match selected.as_ref()? {
-        Selection::Row(addr) => filtered.iter().position(|r| &r.address == addr),
-        Selection::Create => Some(filtered.len()),
+    fn sorts(&self) -> bool {
+        SORT_LABEL
+            .to_lowercase()
+            .contains(&self.filter.to_lowercase())
+    }
+
+    fn extras(&self) -> Extras {
+        Extras {
+            creates: self.creates(),
+            sorts: self.sorts(),
+        }
     }
 }
 
-fn selection_at(filtered: &[&Row], i: usize) -> Selection {
-    filtered
-        .get(i)
-        .map_or(Selection::Create, |r| Selection::Row(r.address.clone()))
+fn current_index(filtered: &[&Row], extras: Extras, selected: &Option<Selection>) -> Option<usize> {
+    match selected.as_ref()? {
+        Selection::Row(addr) => filtered.iter().position(|r| &r.address == addr),
+        Selection::Create => extras.creates.then_some(filtered.len()),
+        Selection::Sort => extras
+            .sorts
+            .then_some(filtered.len() + usize::from(extras.creates)),
+    }
+}
+
+fn selection_at(filtered: &[&Row], extras: Extras, i: usize) -> Selection {
+    match filtered.get(i) {
+        Some(r) => Selection::Row(r.address.clone()),
+        None if extras.creates && i == filtered.len() => Selection::Create,
+        None => Selection::Sort,
+    }
 }
 
 fn running(row: &Row) -> bool {
@@ -153,9 +200,10 @@ fn arm_eligible(row: &Row) -> bool {
 
 fn recompute_selection(state: &mut AppState) {
     let filtered = state.filtered();
-    let items = filtered.len() + usize::from(state.creates());
-    if current_index(&filtered, &state.selected).is_none_or(|i| i >= items) {
-        state.selected = (items > 0).then(|| selection_at(&filtered, 0));
+    let extras = state.extras();
+    let items = extras.items(filtered.len());
+    if current_index(&filtered, extras, &state.selected).is_none_or(|i| i >= items) {
+        state.selected = (items > 0).then(|| selection_at(&filtered, extras, 0));
     }
 }
 
@@ -198,26 +246,35 @@ pub fn update(mut state: AppState, event: Event) -> AppState {
         }
         Event::Up | Event::Down => {
             let filtered = state.filtered();
-            let items = filtered.len() + usize::from(state.creates());
-            let to = current_index(&filtered, &state.selected).and_then(|i| match event {
+            let extras = state.extras();
+            let items = extras.items(filtered.len());
+            let to = current_index(&filtered, extras, &state.selected).and_then(|i| match event {
                 Event::Up => i.checked_sub(1),
                 _ => Some(i + 1).filter(|&j| j < items),
             });
             if let Some(j) = to {
-                state.selected = Some(selection_at(&filtered, j));
+                state.selected = Some(selection_at(&filtered, extras, j));
             }
         }
         Event::Enter | Event::Fresh => {
             let filtered = state.filtered();
-            match current_index(&filtered, &state.selected).map(|i| filtered.get(i)) {
-                Some(None) => state.brief = Some(String::new()),
-                Some(Some(row)) if matches!(event, Event::Enter) => {
+            let extras = state.extras();
+            let current = current_index(&filtered, extras, &state.selected)
+                .map(|i| (filtered.get(i), selection_at(&filtered, extras, i)));
+            match current {
+                Some((None, Selection::Sort)) => {
+                    if matches!(event, Event::Enter) {
+                        state.sort_requested = true;
+                    }
+                }
+                Some((None, _)) => state.brief = Some(String::new()),
+                Some((Some(row), _)) if matches!(event, Event::Enter) => {
                     state.done = Some(Outcome::Selected((*row).clone()));
                 }
-                Some(Some(row)) if !running(row) => {
+                Some((Some(row), _)) if !running(row) => {
                     state.done = Some(Outcome::Fresh((*row).clone()));
                 }
-                Some(Some(row)) if arm_eligible(row) => {
+                Some((Some(row), _)) if arm_eligible(row) => {
                     if state.armed.as_deref() == Some(row.address.as_str()) {
                         state.done = Some(Outcome::FreshRunning((*row).clone()));
                         state.armed = None;
@@ -502,7 +559,8 @@ pub fn view(state: &AppState, width: usize, height: usize, ind: Indicators) -> V
     }
     let tiers = Tiers::for_height(height);
     let filtered = state.filtered();
-    let selected_idx = current_index(&filtered, &state.selected);
+    let extras = state.extras();
+    let selected_idx = current_index(&filtered, extras, &state.selected);
 
     let (filter, cursor) = filter_line(&state.filter, filtered.len(), state.rows.len(), width);
     let mut lines = vec![filter];
@@ -512,17 +570,24 @@ pub fn view(state: &AppState, width: usize, height: usize, ind: Indicators) -> V
     lines.extend(list_lines(
         state,
         &filtered,
+        extras,
         selected_idx,
         width,
         tiers.list,
         ind,
     ));
     if tiers.detail {
-        lines.push(detail_line(
-            selected_idx.and_then(|i| filtered.get(i).copied()),
-            state.armed.as_deref(),
-            width,
-        ));
+        let sort_selected =
+            selected_idx.is_some_and(|i| selection_at(&filtered, extras, i) == Selection::Sort);
+        lines.push(if sort_selected {
+            note_line(state.sort_note.as_deref().unwrap_or(SORT_HINT), width)
+        } else {
+            detail_line(
+                selected_idx.and_then(|i| filtered.get(i).copied()),
+                state.armed.as_deref(),
+                width,
+            )
+        });
     }
     if tiers.footer {
         lines.push(footer_line(&FOOTER, width));
@@ -600,35 +665,37 @@ fn rule_line(width: usize) -> ViewLine {
 fn list_lines(
     state: &AppState,
     filtered: &[&Row],
+    extras: Extras,
     selected_idx: Option<usize>,
     width: usize,
     height: usize,
     ind: Indicators,
 ) -> Vec<ViewLine> {
-    let items = filtered.len() + usize::from(state.creates());
-    let mut lines: Vec<ViewLine> = if items == 0 {
+    let items = extras.items(filtered.len());
+    let mut lines: Vec<ViewLine> = Vec::new();
+    if filtered.is_empty() && !extras.creates {
         let message = match state.create_refusal() {
             Some(reason) => reason,
             None if state.rows.is_empty() => "no campaigns".to_string(),
             None => "no matching campaigns".to_string(),
         };
-        vec![note_line(&message, width)]
-    } else {
-        let offset = scroll_offset(selected_idx.unwrap_or(0), items, height);
-        let column = filtered
-            .iter()
-            .map(|row| cells(&row.address))
-            .max()
-            .unwrap_or(0)
-            .min(MAX_ADDRESS_CELLS);
-        (offset..items)
-            .take(height)
-            .map(|i| match filtered.get(i) {
-                Some(row) => row_line(row, column, width, ind, selected_idx == Some(i)),
-                None => create_line(&state.filter, width, selected_idx == Some(i)),
-            })
-            .collect()
-    };
+        lines.push(note_line(&message, width));
+    }
+    let window = height.saturating_sub(lines.len());
+    let offset = scroll_offset(selected_idx.unwrap_or(0), items, window);
+    let column = filtered
+        .iter()
+        .map(|row| cells(&row.address))
+        .max()
+        .unwrap_or(0)
+        .min(MAX_ADDRESS_CELLS);
+    lines.extend((offset..items).take(window).map(|i| {
+        match (filtered.get(i), selection_at(filtered, extras, i)) {
+            (Some(row), _) => row_line(row, column, width, ind, selected_idx == Some(i)),
+            (None, Selection::Sort) => sort_line(width, selected_idx == Some(i)),
+            (None, _) => create_line(&state.filter, width, selected_idx == Some(i)),
+        }
+    }));
     lines.truncate(height);
     lines.resize_with(height, || LineBuilder::new(width).finish(false));
     lines
@@ -675,6 +742,13 @@ fn create_line(address: &str, width: usize, selected: bool) -> ViewLine {
     let mut line = LineBuilder::new(width);
     line.push(" ", Tone::Fill);
     line.push(&format!("+ create {address}"), Tone::Text);
+    line.finish(selected)
+}
+
+fn sort_line(width: usize, selected: bool) -> ViewLine {
+    let mut line = LineBuilder::new(width);
+    line.pad_to(TEXT_COL);
+    line.push(SORT_LABEL, Tone::Text);
     line.finish(selected)
 }
 
@@ -830,12 +904,69 @@ mod tests {
     }
 
     #[test]
-    fn movement_clamps_at_the_bottom() {
+    fn movement_clamps_at_sort_spaces_below_the_last_campaign() {
         let mut state = AppState::new(sample_rows());
         for _ in 0..10 {
             state = update(state, Event::Down);
         }
+        assert_eq!(state.selected, Some(Selection::Sort));
+        let state = update(state, Event::Up);
         assert_eq!(selected(&state), Some("home/cellar"));
+    }
+
+    #[test]
+    fn sort_spaces_shows_while_the_filter_is_part_of_its_label_in_any_case() {
+        let state = AppState::new(sample_rows());
+        assert!(state.sorts());
+        let state = "SpA".chars().fold(state, |s, c| update(s, Event::Char(c)));
+        assert!(state.sorts());
+        assert_eq!(state.selected, Some(Selection::Sort));
+        let state = update(state, Event::Char('x'));
+        assert!(!state.sorts());
+        assert_eq!(state.selected, None);
+    }
+
+    #[test]
+    fn enter_on_sort_spaces_asks_for_a_sort_and_leaves_the_picker_open() {
+        let state = "sort".chars().fold(AppState::new(sample_rows()), |s, c| {
+            update(s, Event::Char(c))
+        });
+        let state = update(state, Event::Enter);
+        assert!(state.sort_requested);
+        assert_eq!(state.done, None);
+        let state = state.sorted("moved 2 workspaces into label order".to_string());
+        assert!(!state.sort_requested);
+        let v = view(&state, 60, 8, Indicators::Dots);
+        assert!(v
+            .lines
+            .iter()
+            .any(|l| l.selected && l.plain().contains(SORT_LABEL)));
+        assert!(v
+            .lines
+            .iter()
+            .any(|l| l.plain().trim() == "moved 2 workspaces into label order"));
+    }
+
+    #[test]
+    fn ctrl_f_on_sort_spaces_does_nothing() {
+        let state = "sort".chars().fold(AppState::new(sample_rows()), |s, c| {
+            update(s, Event::Char(c))
+        });
+        let state = update(state, Event::Fresh);
+        assert!(!state.sort_requested);
+        assert_eq!(state.done, None);
+        assert_eq!(state.brief, None);
+    }
+
+    #[test]
+    fn a_filter_naming_no_campaign_still_says_so_above_sort_spaces() {
+        let state = "spaces".chars().fold(AppState::new(sample_rows()), |s, c| {
+            update(s, Event::Char(c))
+        });
+        let v = view(&state, 60, 8, Indicators::Dots);
+        assert_eq!(v.lines[2].plain(), "  no matching campaigns");
+        assert_eq!(v.lines[3].plain(), ">   Sort spaces");
+        assert!(v.lines[3].selected);
     }
 
     #[test]
@@ -1089,7 +1220,7 @@ mod tests {
                 format!("> ◐ home/garden   Grow the beds.{}working", pad(24)),
                 "    home/kitchen  Stock the pantry and keep th… last 2026-09-10".to_string(),
                 format!("    home/attic{}new", pad(46)),
-                String::new(),
+                "    Sort spaces".to_string(),
                 String::new(),
                 String::new(),
                 "  home/garden · focus w-home/garden · agent working, wait or ex".to_string(),
@@ -1495,7 +1626,7 @@ mod tests {
             dormant("home/kitchen", "2026-09-10"),
             new_row("home/attic"),
         ]);
-        let expected: [&[Kind]; 9] = [
+        let expected: [&[Kind]; 10] = [
             &[],
             &[Filter],
             &[Filter, Row],
@@ -1504,7 +1635,8 @@ mod tests {
             &[Filter, Rule, Row, Row, Footer],
             &[Filter, Rule, Row, Row, Row, Footer],
             &[Filter, Rule, Row, Row, Row, Detail, Footer],
-            &[Filter, Rule, Row, Row, Row, Blank, Detail, Footer],
+            &[Filter, Rule, Row, Row, Row, Row, Detail, Footer],
+            &[Filter, Rule, Row, Row, Row, Row, Blank, Detail, Footer],
         ];
         for (height, want) in expected.iter().enumerate() {
             let got: Vec<Kind> = view(&state, 60, height, Indicators::Dots)
