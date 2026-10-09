@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.3.0 - 2026-10-08
+
 - Tested against herdr 0.9.3, which changes none of the commands,
   replies or paths the plugin uses. It still needs herdr 0.9.1 or later.
 - A new workspace now puts herdr's workspace list in label order: `~`
