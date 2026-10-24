@@ -246,6 +246,13 @@ pub fn resolve(estates: &toml::Table, address: &str) -> Result<Campaign, EstateE
     let mut workdir = root.clone();
     let mut worktree_spec = None;
     if let Some(wt) = fm.get("worktree").and_then(|v| v.as_table()) {
+        for key in ["repo", "branch"] {
+            if !wt.contains_key(key) {
+                return Err(EstateError::Config(format!(
+                    "campaign '{address}': worktree table is missing '{key}'"
+                )));
+            }
+        }
         let repo = wt.get("repo").and_then(scalar_non_empty_str);
         let branch = wt.get("branch").and_then(scalar_non_empty_str);
         if let (Some(repo), Some(branch)) = (repo, branch) {
@@ -668,6 +675,26 @@ mod tests {
         assert_eq!(c.workdir, root);
         assert_eq!(c.add_dirs, resolved.add_dirs);
         assert_eq!(resolved.worktree, None);
+    }
+
+    #[test]
+    fn worktree_table_missing_branch_is_a_config_error() {
+        let d = TempDir::new();
+        let root = d.path().join("home");
+        make_estate(&root, "garden", "---\nworktree:\n  repo: x\n---\n");
+        let estates = estates_with(row(&root));
+        let e = resolve(&estates, "home/garden").unwrap_err().to_string();
+        assert!(e.contains("home/garden") && e.contains("'branch'"), "{e}");
+    }
+
+    #[test]
+    fn worktree_table_missing_repo_is_a_config_error() {
+        let d = TempDir::new();
+        let root = d.path().join("home");
+        make_estate(&root, "garden", "---\nworktree:\n  branch: y\n---\n");
+        let estates = estates_with(row(&root));
+        let e = resolve(&estates, "home/garden").unwrap_err().to_string();
+        assert!(e.contains("home/garden") && e.contains("'repo'"), "{e}");
     }
 
     #[test]

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A campaign `worktree` table missing `repo` or `branch` is now a config
+  error naming the campaign and the key, not a silent run in the main
+  checkout.
+
 ## v0.3.0 - 2026-10-08
 
 - Tested against herdr 0.9.3, which changes none of the commands,
