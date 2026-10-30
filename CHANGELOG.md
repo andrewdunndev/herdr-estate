@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.3.1 - 2026-10-30
+
 - `resume` and `fresh` on a workspace with other panes, whose agent has
   exited, no longer close the workspace. They start the new agent in the
   pane the agent was launched in, which herdr-estate now records, and
