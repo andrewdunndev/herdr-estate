@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Ctrl-f's stop-then-fresh now works in a workspace with more than one
+  pane, such as a shell or a review pane beside the agent. It stops only
+  the agent's pane with Ctrl-C, waits for the agent to leave, and starts
+  the new conversation in that same pane; every other pane keeps running
+  and keeps its place. It finds the agent by its herdr name, and refuses,
+  listing the panes, when none or more than one in the workspace carries
+  it, when the agent is not idle or done, or when it does not exit.
+  A one-pane workspace is replaced as before.
 - A campaign `worktree` table missing `repo` or `branch` is now a config
   error naming the campaign and the key, not a silent run in the main
   checkout.

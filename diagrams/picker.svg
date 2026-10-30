@@ -59,7 +59,7 @@
     <text x="820" y="246" font-size="11" fill="#ffffff" opacity="0.85">a new conversation at the same address</text>
     <rect x="800" y="292" width="340" height="56" rx="4" fill="#f4f4f4" stroke="#e0e0e0" stroke-width="1"/>
     <text x="820" y="316" font-size="13" font-weight="600" fill="#0a0a0a">stop the agent, then fresh</text>
-    <text x="820" y="336" font-size="11" fill="#707070">only in a workspace we made, with one pane</text>
+    <text x="820" y="336" font-size="11" fill="#707070">only in a workspace we made; other panes keep running</text>
     <rect x="800" y="382" width="340" height="56" rx="4" fill="#ffffff" stroke="#707070" stroke-width="1" stroke-dasharray="4 3"/>
     <text x="820" y="406" font-size="13" font-weight="600" fill="#0a0a0a">nothing happens</text>
     <text x="820" y="426" font-size="11" fill="#707070">the agent is still busy</text>

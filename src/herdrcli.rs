@@ -226,6 +226,54 @@ pub fn workspace_list() -> Result<Vec<Workspace>, EstateError> {
     Ok(list.workspaces)
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AgentRow {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub pane_id: Option<String>,
+    #[serde(default)]
+    pub workspace_id: Option<String>,
+    #[serde(default)]
+    pub agent_status: Option<AgentStatus>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PaneRow {
+    #[serde(default)]
+    pub pane_id: Option<String>,
+    #[serde(default)]
+    pub agent: Option<String>,
+}
+
+pub fn agent_list() -> Result<Vec<AgentRow>, EstateError> {
+    let result = call_herdr(&["agent".to_string(), "list".to_string()], true)?;
+    let agents = result.data.get("agents").cloned().ok_or_else(|| {
+        EstateError::Protocol("agent list: response carried no 'agents' array".to_string())
+    })?;
+    serde_json::from_value(agents).map_err(|_| {
+        EstateError::Protocol("agent list: 'agents' was not an array of agents".to_string())
+    })
+}
+
+pub fn pane_list(workspace_id: &str) -> Result<Vec<PaneRow>, EstateError> {
+    let result = call_herdr(
+        &[
+            "pane".to_string(),
+            "list".to_string(),
+            "--workspace".to_string(),
+            workspace_id.to_string(),
+        ],
+        true,
+    )?;
+    let panes = result.data.get("panes").cloned().ok_or_else(|| {
+        EstateError::Protocol("pane list: response carried no 'panes' array".to_string())
+    })?;
+    serde_json::from_value(panes).map_err(|_| {
+        EstateError::Protocol("pane list: 'panes' was not an array of panes".to_string())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -15,6 +15,10 @@ herdr-estate: home/garden: claude is ready in w9
 herdr-estate: home/garden: focusing w9
 ```
 
+A stop-then-fresh in a workspace with other panes keeps the workspace:
+it prints a `stopping the agent in pane` line in place of the close, the
+create, and the workspace id, and starts the agent in that same pane.
+
 `create` makes the campaign's directory, then says one line before it
 writes the two files; it never commits them:
 
