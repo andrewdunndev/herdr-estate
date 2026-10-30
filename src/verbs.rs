@@ -221,7 +221,7 @@ fn shlex_join(argv: &[String]) -> String {
 fn print_plan(
     missing_add_dirs: &[std::path::PathBuf],
     prepare_cmd: Option<&[String]>,
-    create_cmd: &[String],
+    create_cmd: Option<&[String]>,
     agent_cmd: &[String],
     close_cmd: Option<&[String]>,
 ) {
@@ -239,8 +239,10 @@ fn print_plan(
         println!("would close:");
         println!("  herdr {}", shlex_join(close));
     }
-    println!("would create:");
-    println!("  herdr {}", shlex_join(create_cmd));
+    if let Some(create) = create_cmd {
+        println!("would create:");
+        println!("  herdr {}", shlex_join(create));
+    }
     println!("would start:");
     println!("  herdr {}", shlex_join(agent_cmd));
 }
@@ -269,7 +271,14 @@ fn created_ids(created: &HerdrResult) -> Result<(String, String), EstateError> {
     Ok((workspace_id, pane_id))
 }
 
-fn check_live_workspace(address: &str) -> Result<Option<Workspace>, EstateError> {
+fn split_live(live: Option<(Workspace, Option<String>)>) -> (Option<Workspace>, Option<String>) {
+    match live {
+        Some((ws, pane)) => (Some(ws), pane),
+        None => (None, None),
+    }
+}
+
+fn check_live_workspace(address: &str) -> Result<Option<(Workspace, Option<String>)>, EstateError> {
     let ws = match doubleopen::live_workspace(address)? {
         Some(w) => w,
         None => return Ok(None),
@@ -283,7 +292,48 @@ fn check_live_workspace(address: &str) -> Result<Option<Workspace>, EstateError>
     if !ownership::is_ours(&ws.workspace_id) {
         return Err(refuse_not_ours(address));
     }
-    Ok(Some(ws))
+    let agent_pane = exited_agent_pane(address, &ws)?;
+    Ok(Some((ws, agent_pane)))
+}
+
+fn exited_agent_pane(address: &str, ws: &Workspace) -> Result<Option<String>, EstateError> {
+    if !matches!(ws.pane_count, Some(n) if n > 1) {
+        return Ok(None);
+    }
+    let Some(pane_id) = ownership::agent_pane(&ws.workspace_id) else {
+        return Err(refuse_unidentified_pane(
+            address,
+            ws,
+            "no pane was recorded when it launched",
+        ));
+    };
+    verify_exited_pane(address, ws, &pane_id)?;
+    Ok(Some(pane_id))
+}
+
+fn verify_exited_pane(address: &str, ws: &Workspace, pane_id: &str) -> Result<(), EstateError> {
+    let panes = herdrcli::pane_list(&ws.workspace_id)?;
+    if !panes.iter().any(|p| p.pane_id.as_deref() == Some(pane_id)) {
+        return Err(refuse_unidentified_pane(
+            address,
+            ws,
+            &format!("the pane recorded for it, {pane_id}, is gone"),
+        ));
+    }
+    let holder = herdrcli::agent_list()?
+        .into_iter()
+        .find(|a| a.pane_id.as_deref() == Some(pane_id));
+    if let Some(holder) = holder {
+        return Err(refuse_unidentified_pane(
+            address,
+            ws,
+            &format!(
+                "the pane recorded for it, {pane_id}, now holds the agent {}",
+                holder.name.as_deref().unwrap_or("?")
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn refuse_not_ours(address: &str) -> EstateError {
@@ -378,7 +428,7 @@ fn refuse_unidentified_pane(address: &str, ws: &Workspace, why: &str) -> EstateE
         Err(_) => "not listable".to_string(),
     };
     EstateError::Guard(format!(
-        "{address}: workspace {} carries {count} panes and herdr-estate cannot tell which is its agent ({why}); refusing to stop anything. Panes: {panes}",
+        "{address}: workspace {} carries {count} panes and herdr-estate cannot tell which is its agent ({why}); leaving every pane as it is. Panes: {panes}",
         ws.workspace_id
     ))
 }
@@ -419,19 +469,30 @@ fn restart_agent_in_place(
     address: &str,
     ws: &Workspace,
     pane_id: &str,
+    stopping: bool,
     agent_argv: &[String],
 ) -> Result<(String, String), EstateError> {
-    let current = find_agent_pane(address, ws)?;
-    if current != pane_id {
-        return Err(EstateError::Guard(format!(
-            "{address}: the agent moved from pane {pane_id} to {current} while preparing; refusing to stop it"
-        )));
+    if stopping {
+        let current = find_agent_pane(address, ws)?;
+        if current != pane_id {
+            return Err(EstateError::Guard(format!(
+                "{address}: the agent moved from pane {pane_id} to {current} while preparing; refusing to stop it"
+            )));
+        }
+        progress::step(&format!(
+            "{address}: stopping the agent in pane {pane_id} of {}, leaving its other panes running",
+            ws.workspace_id
+        ));
+        stop_agent_pane(address, ws, pane_id)?;
+    } else {
+        verify_exited_pane(address, ws, pane_id)?;
+        progress::step(&format!(
+            "{address}: starting a new agent in pane {pane_id} of {}, leaving its other panes running",
+            ws.workspace_id
+        ));
     }
-    progress::step(&format!(
-        "{address}: stopping the agent in pane {pane_id} of {}, leaving its other panes running",
-        ws.workspace_id
-    ));
-    stop_agent_pane(address, ws, pane_id)?;
+    ownership::record_agent_pane(&ws.workspace_id, pane_id)
+        .map_err(|e| EstateError::Config(format!("could not update the ownership record: {e}")))?;
     let kind = campaign.kind.as_str();
     progress::step(&format!(
         "{address}: starting {kind} in pane {pane_id}, waiting up to {}s for it to be ready",
@@ -677,7 +738,14 @@ fn open_workspace(
         ));
     }
     if let (Some(ws), Some(pane_id)) = (&ws, agent_pane) {
-        return restart_agent_in_place(campaign, address, ws, pane_id, agent_argv);
+        return restart_agent_in_place(
+            campaign,
+            address,
+            ws,
+            pane_id,
+            close_mode.requires_idle_or_done(),
+            agent_argv,
+        );
     }
     if let Some(ws) = ws {
         progress::step(&format!(
@@ -707,6 +775,8 @@ fn open_workspace(
     let created = herdrcli::call_herdr(create_cmd, true)?;
     let (workspace_id, pane_id) = created_ids(&created)?;
     ownership::record(address, &workspace_id)
+        .map_err(|e| EstateError::Config(format!("could not update the ownership record: {e}")))?;
+    ownership::record_agent_pane(&workspace_id, &pane_id)
         .map_err(|e| EstateError::Config(format!("could not update the ownership record: {e}")))?;
     let kind = campaign.kind.as_str();
     progress::step(&format!(
@@ -746,12 +816,14 @@ fn dry_run_plan(
     campaign: &Campaign,
     address: &str,
     ws: Option<&Workspace>,
+    agent_pane: Option<&str>,
     prepare_cmd: Option<&[String]>,
     create_cmd_redacted: &[String],
     start_cmd: &[String],
 ) -> Result<i32, EstateError> {
     let close_cmd = match ws {
         None => None,
+        Some(_) if agent_pane.is_some() => None,
         Some(w) => {
             if confirm_label_matches(&w.workspace_id, address)?.is_some() {
                 Some(vec![
@@ -773,11 +845,24 @@ fn dry_run_plan(
             campaign.workdir.display()
         );
     }
+    let start_cmd: Vec<String> = match agent_pane {
+        Some(pane) => start_cmd
+            .iter()
+            .map(|a| {
+                if a == PANE_PLACEHOLDER {
+                    pane.to_string()
+                } else {
+                    a.clone()
+                }
+            })
+            .collect(),
+        None => start_cmd.to_vec(),
+    };
     print_plan(
         &campaign.missing_add_dirs,
         prepare_cmd,
-        create_cmd_redacted,
-        start_cmd,
+        agent_pane.is_none().then_some(create_cmd_redacted),
+        &start_cmd,
         close_cmd.as_deref(),
     );
     Ok(0)
@@ -823,7 +908,7 @@ pub(crate) fn resume_with_ids(
         }
     }
 
-    let ws = check_live_workspace(address)?;
+    let (ws, agent_pane) = split_live(check_live_workspace(address)?);
 
     if dry_run {
         let agent_argv = build_agent_argv(&campaign, Verb::Resume, &conversation_id);
@@ -832,6 +917,7 @@ pub(crate) fn resume_with_ids(
             &campaign,
             address,
             ws.as_ref(),
+            agent_pane.as_deref(),
             campaign.prepare.as_deref(),
             &create_args(&campaign, true),
             &start_cmd,
@@ -851,7 +937,7 @@ pub(crate) fn resume_with_ids(
         address,
         ws,
         CloseMode::Exited,
-        None,
+        agent_pane.as_deref(),
         Verb::Resume,
         &conversation_id,
     )?;
@@ -885,14 +971,14 @@ fn fresh_resolved(
     dry_run: bool,
 ) -> Result<VerbResult, EstateError> {
     let old_id = fresh_registry_guard(campaign, address)?;
-    let ws = check_live_workspace(address)?;
+    let (ws, agent_pane) = split_live(check_live_workspace(address)?);
     fresh_open(
         campaign,
         address,
         old_id,
         ws,
         CloseMode::Exited,
-        None,
+        agent_pane,
         dry_run,
     )
 }
@@ -970,6 +1056,7 @@ fn fresh_open(
             campaign,
             address,
             ws.as_ref(),
+            agent_pane.as_deref(),
             campaign.prepare.as_deref(),
             &create_args(campaign, true),
             &start_cmd,
@@ -2668,6 +2755,7 @@ mod tests {
             assert_ne!(call[..2], ["pane", "close"], "{call:?}");
         }
         assert!(ownership::is_ours("w1"));
+        assert_eq!(ownership::agent_pane("w1").as_deref(), Some("w1:p2"));
         let lines = continuity::read(&f.cdir);
         assert_eq!(lines.len(), 2);
         assert!(lines[0].ends_with(" old-sid"), "{lines:?}");
@@ -2757,6 +2845,184 @@ mod tests {
             assert_ne!(call[..2], ["workspace", "close"], "{call:?}");
         }
         assert_eq!(continuity::read(&f.cdir).len(), 1);
+    }
+
+    const EXITED_TWO_PANES: &str = r#"{"result": {"workspaces": [
+        {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown", "pane_count": 2}
+    ]}}"#;
+
+    const SHELL_PANES: &str = r#"{"result": {"panes": [
+        {"pane_id": "w1:p1"},
+        {"pane_id": "w1:p2"}
+    ]}}"#;
+
+    fn exited_two_pane_fixture(recorded: Option<&str>) -> Fixture {
+        let f = make_fixture("claude");
+        ownership::record("home/garden", "w1").unwrap();
+        if let Some(pane) = recorded {
+            ownership::record_agent_pane("w1", pane).unwrap();
+        }
+        f.fake.set_response(0, EXITED_TWO_PANES, 0);
+        f
+    }
+
+    #[test]
+    fn fresh_after_the_agent_exited_restarts_in_the_recorded_pane_of_a_multi_pane_workspace() {
+        let f = exited_two_pane_fixture(Some("w1:p1"));
+        continuity::append(&f.cdir, "old-sid").unwrap();
+        f.fake.set_response(1, SHELL_PANES, 0);
+        f.fake.set_response(2, NO_AGENTS, 0);
+        f.fake.set_response(3, SHELL_PANES, 0);
+        f.fake.set_response(4, NO_AGENTS, 0);
+        f.fake.set_response(5, r#"{"result": {}}"#, 0);
+
+        let result = fresh_with_ids(&f.estates, "home/garden", false).unwrap();
+
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.workspace_id.as_deref(), Some("w1"));
+        assert_eq!(f.fake.call_count(), 6);
+        let start = f.fake.argv(5);
+        assert_eq!(start[..2], ["agent", "start"]);
+        let pane_idx = start.iter().position(|a| a == "--pane").unwrap();
+        assert_eq!(start[pane_idx + 1], "w1:p1");
+        for call in calls(&f) {
+            assert_ne!(call[..2], ["workspace", "close"], "{call:?}");
+            assert_ne!(call[..2], ["workspace", "create"], "{call:?}");
+            assert_ne!(call[..2], ["pane", "close"], "{call:?}");
+            assert_ne!(call[..2], ["pane", "send-keys"], "{call:?}");
+        }
+        assert!(ownership::is_ours("w1"));
+        assert_eq!(ownership::agent_pane("w1").as_deref(), Some("w1:p1"));
+        assert_eq!(
+            progress::logged_messages()[1],
+            "home/garden: starting a new agent in pane w1:p1 of w1, leaving its other panes running"
+        );
+    }
+
+    #[test]
+    fn resume_after_the_agent_exited_restarts_in_the_recorded_pane_of_a_multi_pane_workspace() {
+        let f = make_fixture("codex");
+        ownership::record("home/garden", "w1").unwrap();
+        ownership::record_agent_pane("w1", "w1:p2").unwrap();
+        continuity::append(&f.cdir, "old-sid").unwrap();
+        f.fake.set_response(0, EXITED_TWO_PANES, 0);
+        f.fake.set_response(1, SHELL_PANES, 0);
+        f.fake.set_response(2, NO_AGENTS, 0);
+        f.fake.set_response(3, SHELL_PANES, 0);
+        f.fake.set_response(4, NO_AGENTS, 0);
+        f.fake.set_response(5, r#"{"result": {}}"#, 0);
+
+        let result = resume_with_ids(&f.estates, "home/garden", false).unwrap();
+
+        assert_eq!(result.workspace_id.as_deref(), Some("w1"));
+        let start = f.fake.argv(5);
+        let pane_idx = start.iter().position(|a| a == "--pane").unwrap();
+        assert_eq!(start[pane_idx + 1], "w1:p2");
+        for call in calls(&f) {
+            assert_ne!(call[..2], ["workspace", "close"], "{call:?}");
+        }
+    }
+
+    #[test]
+    fn a_dry_run_in_a_multi_pane_workspace_reads_the_panes_and_touches_nothing() {
+        let f = exited_two_pane_fixture(Some("w1:p1"));
+        f.fake.set_response(1, SHELL_PANES, 0);
+        f.fake.set_response(2, NO_AGENTS, 0);
+        let result = fresh_with_ids(&f.estates, "home/garden", true).unwrap();
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(f.fake.call_count(), 3);
+        for call in calls(&f) {
+            assert!(
+                matches!(call[0].as_str(), "workspace" | "pane" | "agent")
+                    && matches!(call[1].as_str(), "list"),
+                "{call:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fresh_after_the_agent_exited_refuses_a_multi_pane_workspace_with_no_recorded_pane() {
+        let f = exited_two_pane_fixture(None);
+        f.fake.set_response(1, SHELL_PANES, 0);
+        let err = fresh_with_ids(&f.estates, "home/garden", false).unwrap_err();
+        assert!(
+            matches!(err, EstateError::Guard(ref msg)
+                if msg.contains("2 panes") && msg.contains("no pane was recorded")
+                    && msg.contains("w1:p1") && msg.contains("w1:p2")),
+            "{err:?}"
+        );
+        assert_eq!(f.fake.call_count(), 2);
+        assert!(ownership::is_ours("w1"));
+    }
+
+    #[test]
+    fn fresh_after_the_agent_exited_refuses_when_the_recorded_pane_is_gone() {
+        let f = exited_two_pane_fixture(Some("w1:p7"));
+        f.fake.set_response(1, SHELL_PANES, 0);
+        f.fake.set_response(2, SHELL_PANES, 0);
+        let err = fresh_with_ids(&f.estates, "home/garden", false).unwrap_err();
+        assert!(
+            matches!(err, EstateError::Guard(ref msg)
+                if msg.contains("w1:p7") && msg.contains("gone") && msg.contains("w1:p2")),
+            "{err:?}"
+        );
+        for call in calls(&f) {
+            assert_ne!(call[..2], ["agent", "start"], "{call:?}");
+            assert_ne!(call[..2], ["workspace", "close"], "{call:?}");
+        }
+    }
+
+    #[test]
+    fn fresh_after_the_agent_exited_refuses_when_another_agent_now_holds_the_recorded_pane() {
+        let f = exited_two_pane_fixture(Some("w1:p1"));
+        f.fake.set_response(1, SHELL_PANES, 0);
+        f.fake.set_response(
+            2,
+            r#"{"result": {"agents": [
+                {"name": "someone-else", "pane_id": "w1:p1", "workspace_id": "w1", "agent_status": "idle"}
+            ]}}"#,
+            0,
+        );
+        f.fake.set_response(3, SHELL_PANES, 0);
+        let err = fresh_with_ids(&f.estates, "home/garden", false).unwrap_err();
+        assert!(
+            matches!(err, EstateError::Guard(ref msg)
+                if msg.contains("someone-else") && msg.contains("w1:p1")),
+            "{err:?}"
+        );
+        for call in calls(&f) {
+            assert_ne!(call[..2], ["agent", "start"], "{call:?}");
+            assert_ne!(call[..2], ["workspace", "close"], "{call:?}");
+        }
+    }
+
+    #[test]
+    fn fresh_after_the_agent_exited_still_replaces_a_one_pane_workspace_and_records_its_pane() {
+        let f = make_fixture("claude");
+        ownership::record("home/garden", "w1").unwrap();
+        ownership::record_agent_pane("w1", "w1:p1").unwrap();
+        f.fake.set_response(
+            0,
+            r#"{"result": {"workspaces": [
+                {"workspace_id": "w1", "label": "home/garden", "agent_status": "unknown", "pane_count": 1}
+            ]}}"#,
+            0,
+        );
+        f.fake.set_response(
+            1,
+            r#"{"result": {"workspace": {"label": "home/garden", "agent_status": "unknown", "pane_count": 1}}}"#,
+            0,
+        );
+        f.fake.set_response(2, r#"{"result": {}}"#, 0);
+        f.fake.set_response(3, CREATE_OK, 0);
+        f.fake.set_response(4, r#"{"result": {}}"#, 0);
+
+        let result = fresh_with_ids(&f.estates, "home/garden", false).unwrap();
+
+        assert_eq!(result.workspace_id.as_deref(), Some("w9"));
+        assert_eq!(f.fake.argv(2), vec!["workspace", "close", "w1"]);
+        assert_eq!(ownership::agent_pane("w1"), None);
+        assert_eq!(ownership::agent_pane("w9").as_deref(), Some("p1"));
     }
 
     #[test]

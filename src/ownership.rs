@@ -6,13 +6,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::paths::state_dir;
 
 const FILE_NAME: &str = "owned.json";
+const PANES_FILE_NAME: &str = "agent-panes.json";
 
-fn path() -> PathBuf {
-    state_dir().join(FILE_NAME)
+fn path_of(file_name: &str) -> PathBuf {
+    state_dir().join(file_name)
 }
 
 fn load() -> BTreeMap<String, String> {
-    let p = path();
+    load_file(FILE_NAME)
+}
+
+fn load_file(file_name: &str) -> BTreeMap<String, String> {
+    let p = path_of(file_name);
     if !p.is_file() {
         return BTreeMap::new();
     }
@@ -34,7 +39,11 @@ fn temp_suffix() -> String {
 }
 
 fn save(records: &BTreeMap<String, String>) -> std::io::Result<()> {
-    let p = path();
+    save_file(FILE_NAME, records)
+}
+
+fn save_file(file_name: &str, records: &BTreeMap<String, String>) -> std::io::Result<()> {
+    let p = path_of(file_name);
     let parent = p
         .parent()
         .map(|d| d.to_path_buf())
@@ -80,7 +89,22 @@ pub fn forget(workspace_id: &str) -> std::io::Result<()> {
     if records.remove(workspace_id).is_some() {
         save(&records)?;
     }
+    let mut panes = load_file(PANES_FILE_NAME);
+    if panes.remove(workspace_id).is_some() {
+        save_file(PANES_FILE_NAME, &panes)?;
+    }
     Ok(())
+}
+
+pub fn record_agent_pane(workspace_id: &str, pane_id: &str) -> std::io::Result<()> {
+    let _held = crate::lock::hold_owned()?;
+    let mut panes = load_file(PANES_FILE_NAME);
+    panes.insert(workspace_id.to_string(), pane_id.to_string());
+    save_file(PANES_FILE_NAME, &panes)
+}
+
+pub fn agent_pane(workspace_id: &str) -> Option<String> {
+    load_file(PANES_FILE_NAME).remove(workspace_id)
 }
 
 pub fn prune(
@@ -99,6 +123,15 @@ pub fn prune(
     if kept != records {
         save(&kept)?;
     }
+    let panes = load_file(PANES_FILE_NAME);
+    let kept_panes: BTreeMap<String, String> = panes
+        .iter()
+        .filter(|(k, _)| kept.contains_key(k.as_str()))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    if kept_panes != panes {
+        save_file(PANES_FILE_NAME, &kept_panes)?;
+    }
     Ok(())
 }
 
@@ -114,6 +147,55 @@ mod tests {
             d.path().to_str().expect("utf8 path"),
         )]);
         (d, g)
+    }
+
+    #[test]
+    fn an_agent_pane_is_recorded_per_workspace_and_read_back() {
+        let (_d, _g) = isolated();
+        record("home/garden", "w1").unwrap();
+        assert_eq!(agent_pane("w1"), None);
+        record_agent_pane("w1", "w1:p2").unwrap();
+        assert_eq!(agent_pane("w1").as_deref(), Some("w1:p2"));
+        assert_eq!(agent_pane("w2"), None);
+    }
+
+    #[test]
+    fn the_agent_pane_record_lives_beside_owned_json_and_leaves_it_alone() {
+        let (d, _g) = isolated();
+        record("home/garden", "w1").unwrap();
+        record_agent_pane("w1", "w1:p1").unwrap();
+        let owned: BTreeMap<String, String> =
+            serde_json::from_str(&std::fs::read_to_string(d.path().join("owned.json")).unwrap())
+                .unwrap();
+        assert_eq!(owned.len(), 1);
+        assert_eq!(owned["w1"], "home/garden");
+        assert!(d.path().join("agent-panes.json").is_file());
+    }
+
+    #[test]
+    fn forgetting_a_workspace_forgets_its_agent_pane() {
+        let (_d, _g) = isolated();
+        record("home/garden", "w1").unwrap();
+        record_agent_pane("w1", "w1:p1").unwrap();
+        forget("w1").unwrap();
+        assert_eq!(agent_pane("w1"), None);
+    }
+
+    #[test]
+    fn pruning_a_vanished_workspace_drops_its_agent_pane() {
+        let (_d, _g) = isolated();
+        record("home/garden", "w1").unwrap();
+        record_agent_pane("w1", "w1:p1").unwrap();
+        let recorded = ids();
+        prune(&BTreeSet::new(), &recorded).unwrap();
+        assert_eq!(agent_pane("w1"), None);
+    }
+
+    #[test]
+    fn an_unreadable_agent_pane_file_reads_as_none() {
+        let (d, _g) = isolated();
+        std::fs::write(d.path().join("agent-panes.json"), "not json").unwrap();
+        assert_eq!(agent_pane("w1"), None);
     }
 
     #[test]

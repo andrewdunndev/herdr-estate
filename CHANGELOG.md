@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `resume` and `fresh` on a workspace with other panes, whose agent has
+  exited, no longer close the workspace. They start the new agent in the
+  pane the agent was launched in, which herdr-estate now records, and
+  leave every other pane running. A workspace with no recorded pane
+  (launched by an earlier version), a recorded pane that is gone, or one
+  that now holds another agent is refused, listing the panes. A
+  one-pane workspace is replaced as before.
 - Ctrl-f's stop-then-fresh now works in a workspace with more than one
   pane, such as a shell or a review pane beside the agent. It stops only
   the agent's pane with Ctrl-C, waits for the agent to leave, and starts
