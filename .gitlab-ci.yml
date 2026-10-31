@@ -45,7 +45,7 @@ include:
   - component: gitlab.com/dunn.dev/pipeline/release-create@4
     inputs:
       package_name: herdr-estate
-  - component: gitlab.com/dunn.dev/pipeline/github-release@4.14.0
+  - component: gitlab.com/dunn.dev/pipeline/github-release@4
     inputs:
       github_repo: andrewdunndev/herdr-estate
 
