@@ -412,6 +412,10 @@ fn cluster_cells(cluster: &str) -> usize {
         return 0;
     }
     cluster.width()
+        + cluster
+            .chars()
+            .filter(|c| matches!(c, '\u{FF9E}' | '\u{FF9F}'))
+            .count()
 }
 
 fn cells(s: &str) -> usize {
@@ -1484,7 +1488,7 @@ mod tests {
             ("🇬🇧", 2),
             ("👍🏽", 2),
             ("日本", 4),
-            ("ｶ\u{FF9E}", 2),
+            ("ｶ\u{FF9E}", 3),
             ("ក\u{17D2}ក", 1),
             ("\u{16D63}\u{16D67}", 1),
             ("\t", 0),
