@@ -412,10 +412,6 @@ fn cluster_cells(cluster: &str) -> usize {
         return 0;
     }
     cluster.width()
-        + cluster
-            .chars()
-            .filter(|c| matches!(c, '\u{FF9E}' | '\u{FF9F}'))
-            .count()
 }
 
 fn cells(s: &str) -> usize {
