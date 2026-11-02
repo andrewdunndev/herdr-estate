@@ -1,11 +1,14 @@
 # Changelog
 
-## Unreleased
+## v0.3.2 - 2026-11-02
 
 - The composed prompt file now opens with a short "This session" block
   naming the session's address and campaign directory, so a recycled
   session knows where it is. A campaign with no prompt files now gets a
   prompt file holding only that block.
+- Releases are now also published to the GitHub mirror.
+- unicode-width is held below 0.2.3, which double-counts halfwidth
+  sound marks under ratatui; picker rows holding them stay aligned.
 
 ## v0.3.1 - 2026-10-30
 
