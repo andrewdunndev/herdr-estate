@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The composed prompt file now opens with a short "This session" block
+  naming the session's address and campaign directory, so a recycled
+  session knows where it is. A campaign with no prompt files now gets a
+  prompt file holding only that block.
+
 ## v0.3.1 - 2026-10-30
 
 - `resume` and `fresh` on a workspace with other panes, whose agent has

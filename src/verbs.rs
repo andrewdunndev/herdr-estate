@@ -192,8 +192,8 @@ pub fn close_if_ours(
 }
 
 fn build_agent_argv(campaign: &Campaign, verb: Verb, conversation_id: &str) -> Vec<String> {
-    let prompt_file = prompt::prompt_path(&campaign.estate, &campaign.name, &campaign.prompt_files);
-    let argv = adapters::build_argv(campaign, verb, conversation_id, prompt_file.as_deref());
+    let prompt_file = prompt::prompt_path(&campaign.estate, &campaign.name);
+    let argv = adapters::build_argv(campaign, verb, conversation_id, Some(&prompt_file));
     argv.into_iter().skip(1).collect()
 }
 
@@ -725,9 +725,7 @@ fn open_workspace(
     let campaign = &campaign::materialise(resolved)?;
     let create_cmd = &create_args(campaign, false);
     let agent_argv = &build_agent_argv(campaign, verb, conversation_id);
-    if !campaign.prompt_files.is_empty() {
-        prompt::write_prompt(&campaign.estate, &campaign.name, &campaign.prompt_files)?;
-    }
+    prompt::write_prompt(campaign)?;
     if let Some(argv) = &campaign.prepare {
         run_prepare(campaign, address, argv)?;
     }
