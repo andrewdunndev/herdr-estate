@@ -1,0 +1,10 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "packageRules": [
+    {
+      "description": "Hold unicode-width below 0.2.3 (2026-11-07): ratatui-core adds its own +1 for U+FF9E/U+FF9F, which 0.2.3 now counts too. Lift when ratatui-core drops its +1.",
+      "matchPackageNames": ["unicode-width"],
+      "allowedVersions": "<0.2.3"
+    }
+  ]
+}

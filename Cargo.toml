@@ -15,4 +15,4 @@ serde_json = "1"
 toml = { version = "1", default-features = false, features = ["std", "serde", "parse"] }
 unicode-segmentation = "1"
 # ratatui-core adds its own +1 for U+FF9E/U+FF9F, so both stay coherent only below 0.2.3.
-unicode-width = ">=0.2, <0.2.4"
+unicode-width = ">=0.2, <0.2.3"
