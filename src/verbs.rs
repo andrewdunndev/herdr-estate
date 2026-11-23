@@ -714,7 +714,7 @@ fn prepare_failure_detail(output: &std::process::Output) -> String {
 }
 
 fn open_workspace(
-    resolved: &Campaign,
+    campaign: &Campaign,
     address: &str,
     ws: Option<Workspace>,
     close_mode: CloseMode,
@@ -722,7 +722,6 @@ fn open_workspace(
     verb: Verb,
     conversation_id: &str,
 ) -> Result<(String, String), EstateError> {
-    let campaign = resolved;
     let create_cmd = &create_args(campaign, false);
     let agent_argv = &build_agent_argv(campaign, verb, conversation_id);
     prompt::write_prompt(campaign)?;
