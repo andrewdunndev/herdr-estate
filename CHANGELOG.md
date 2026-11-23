@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Removed the `~/.config/herdr-estate/estates.toml` fallback; the estate
+  table is read only from herdr's plugin config dir.
+
 ## v0.3.2 - 2026-11-02
 
 - The composed prompt file now opens with a short "This session" block

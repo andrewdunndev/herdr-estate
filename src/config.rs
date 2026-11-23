@@ -1,28 +1,13 @@
 use std::path::{Path, PathBuf};
 
 use crate::errors::EstateError;
-use crate::paths::{home_dir, plugin_config_dir};
+use crate::paths::plugin_config_dir;
 
 pub const DEFAULT_CAMPAIGNS_DIR: &str = "campaigns";
 pub const DEFAULT_AGENT_KIND: &str = "claude";
 
 pub fn config_path() -> PathBuf {
-    let herdrs = plugin_config_dir().join("estates.toml");
-    if herdrs.is_file() {
-        return herdrs;
-    }
-    let legacy = legacy_config_path();
-    if legacy.is_file() {
-        return legacy;
-    }
-    herdrs
-}
-
-fn legacy_config_path() -> PathBuf {
-    home_dir()
-        .join(".config")
-        .join("herdr-estate")
-        .join("estates.toml")
+    plugin_config_dir().join("estates.toml")
 }
 
 pub fn load_estates(path: Option<&Path>) -> Result<toml::Table, EstateError> {
@@ -145,32 +130,9 @@ GREETING = "hi"
         assert_eq!(config_path(), p);
     }
 
-    fn write_legacy(home: &Path) -> PathBuf {
-        let p = home
-            .join(".config")
-            .join("herdr-estate")
-            .join("estates.toml");
-        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(&p, ESTATES_TOML).unwrap();
-        p
-    }
-
     #[test]
-    fn a_legacy_table_is_read_when_herdrs_config_dir_has_none() {
-        let d = TempDir::new();
+    fn a_shell_run_reads_the_table_in_herdrs_config_dir() {
         let home = TempDir::new();
-        let legacy = write_legacy(home.path());
-        let _g = EnvGuard::set(&[
-            ("HERDR_PLUGIN_CONFIG_DIR", d.path().to_str().unwrap()),
-            ("HOME", home.path().to_str().unwrap()),
-        ]);
-        assert_eq!(config_path(), legacy);
-    }
-
-    #[test]
-    fn a_shell_run_reads_the_table_in_herdrs_config_dir_first() {
-        let home = TempDir::new();
-        write_legacy(home.path());
         let herdrs = home
             .path()
             .join(".config/herdr/plugins/config/herdr-estate/estates.toml");
@@ -181,17 +143,6 @@ GREETING = "hi"
             &["HERDR_PLUGIN_CONFIG_DIR", "XDG_CONFIG_HOME"],
         );
         assert_eq!(config_path(), herdrs);
-    }
-
-    #[test]
-    fn a_shell_run_falls_back_to_the_legacy_table() {
-        let home = TempDir::new();
-        let legacy = write_legacy(home.path());
-        let _g = EnvGuard::new(
-            &[("HOME", home.path().to_str().unwrap())],
-            &["HERDR_PLUGIN_CONFIG_DIR", "XDG_CONFIG_HOME"],
-        );
-        assert_eq!(config_path(), legacy);
     }
 
     #[test]
