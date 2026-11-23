@@ -5,7 +5,6 @@ use crate::config::{parse_address, DEFAULT_AGENT_KIND};
 use crate::errors::EstateError;
 use crate::frontmatter::{self, Scalar};
 use crate::paths::expand;
-use crate::worktree;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentKind {
@@ -43,13 +42,6 @@ pub struct Campaign {
     pub kind_flags: BTreeMap<String, Scalar>,
     pub env: BTreeMap<String, String>,
     pub prepare: Option<Vec<String>>,
-    pub worktree: Option<WorktreeSpec>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorktreeSpec {
-    pub repo: String,
-    pub branch: String,
 }
 
 fn rooted(root: &Path, p: &str) -> PathBuf {
@@ -102,13 +94,6 @@ fn toml_env_value(v: &toml::Value) -> Option<String> {
         toml::Value::Float(f) => Some(f.to_string()),
         toml::Value::Datetime(d) => Some(d.to_string()),
         toml::Value::Array(_) | toml::Value::Table(_) => None,
-    }
-}
-
-fn scalar_non_empty_str(s: &Scalar) -> Option<&str> {
-    match s {
-        Scalar::Str(v) if !v.is_empty() => Some(v),
-        _ => None,
     }
 }
 
@@ -243,28 +228,6 @@ pub fn resolve(estates: &toml::Table, address: &str) -> Result<Campaign, EstateE
     let mut kind_flags = estate_flags;
     kind_flags.extend(campaign_flags);
 
-    let mut workdir = root.clone();
-    let mut worktree_spec = None;
-    if let Some(wt) = fm.get("worktree").and_then(|v| v.as_table()) {
-        for key in ["repo", "branch"] {
-            if !wt.contains_key(key) {
-                return Err(EstateError::Config(format!(
-                    "campaign '{address}': worktree table is missing '{key}'"
-                )));
-            }
-        }
-        let repo = wt.get("repo").and_then(scalar_non_empty_str);
-        let branch = wt.get("branch").and_then(scalar_non_empty_str);
-        if let (Some(repo), Some(branch)) = (repo, branch) {
-            workdir = worktree::would_ensure_worktree(repo, branch)?;
-            add_dirs.push(workdir.clone());
-            worktree_spec = Some(WorktreeSpec {
-                repo: repo.to_string(),
-                branch: branch.to_string(),
-            });
-        }
-    }
-
     let mut env: BTreeMap<String, String> = BTreeMap::new();
     if let Some(t) = row.get("env").and_then(|v| v.as_table()) {
         for (k, v) in t.iter() {
@@ -282,7 +245,7 @@ pub fn resolve(estates: &toml::Table, address: &str) -> Result<Campaign, EstateE
         estate: estate_name,
         name: campaign_name,
         dir: cdir,
-        workdir,
+        workdir: root.clone(),
         kind,
         add_dirs,
         missing_add_dirs,
@@ -290,22 +253,7 @@ pub fn resolve(estates: &toml::Table, address: &str) -> Result<Campaign, EstateE
         kind_flags,
         env,
         prepare,
-        worktree: worktree_spec,
     })
-}
-
-pub fn materialise(campaign: &Campaign) -> Result<Campaign, EstateError> {
-    let mut materialised = campaign.clone();
-    if let Some(spec) = &campaign.worktree {
-        let made = worktree::ensure_worktree(&spec.repo, &spec.branch)?;
-        for dir in materialised.add_dirs.iter_mut() {
-            if *dir == campaign.workdir {
-                *dir = made.clone();
-            }
-        }
-        materialised.workdir = made;
-    }
-    Ok(materialised)
 }
 
 #[cfg(test)]
@@ -632,124 +580,17 @@ mod tests {
     }
 
     #[test]
-    fn worktree_key_is_created_by_materialise_and_becomes_workdir() {
-        let d = TempDir::new();
-        let root = d.path().join("home");
-        let repo_dir = d.path().join("repo");
-        init_git_repo(&repo_dir);
-        make_estate(
-            &root,
-            "garden",
-            &format!(
-                "---\nworktree:\n  repo: {}\n  branch: wt/site-work\n---\n",
-                repo_dir.display()
-            ),
-        );
-        let estates = estates_with(row(&root));
-        let _g = crate::test_support::EnvGuard::set(&[(
-            "HERDR_PLUGIN_STATE_DIR",
-            d.path().join("state").to_str().unwrap(),
-        )]);
-        let resolved = resolve(&estates, "home/garden").unwrap();
-        assert!(!resolved.workdir.exists(), "resolve creates nothing");
-        let c = materialise(&resolved).unwrap();
-        assert!(c.workdir.is_dir());
-        assert_ne!(c.workdir, root);
-        assert!(c.add_dirs.contains(&c.workdir));
-        assert_eq!(c.add_dirs.len(), resolved.add_dirs.len());
-        assert_eq!(materialise(&resolved).unwrap().workdir, c.workdir);
-    }
-
-    #[test]
-    fn materialise_without_a_worktree_changes_nothing() {
-        let d = TempDir::new();
-        let root = d.path().join("home");
-        make_estate(
-            &root, "garden", "---
----
-",
-        );
-        let estates = estates_with(row(&root));
-        let resolved = resolve(&estates, "home/garden").unwrap();
-        let c = materialise(&resolved).unwrap();
-        assert_eq!(c.workdir, root);
-        assert_eq!(c.add_dirs, resolved.add_dirs);
-        assert_eq!(resolved.worktree, None);
-    }
-
-    #[test]
-    fn worktree_table_missing_branch_is_a_config_error() {
-        let d = TempDir::new();
-        let root = d.path().join("home");
-        make_estate(&root, "garden", "---\nworktree:\n  repo: x\n---\n");
-        let estates = estates_with(row(&root));
-        let e = resolve(&estates, "home/garden").unwrap_err().to_string();
-        assert!(e.contains("home/garden") && e.contains("'branch'"), "{e}");
-    }
-
-    #[test]
-    fn worktree_table_missing_repo_is_a_config_error() {
-        let d = TempDir::new();
-        let root = d.path().join("home");
-        make_estate(&root, "garden", "---\nworktree:\n  branch: y\n---\n");
-        let estates = estates_with(row(&root));
-        let e = resolve(&estates, "home/garden").unwrap_err().to_string();
-        assert!(e.contains("home/garden") && e.contains("'repo'"), "{e}");
-    }
-
-    #[test]
-    fn empty_string_worktree_repo_is_treated_as_no_worktree_key() {
+    fn a_leftover_worktree_key_is_ignored_and_the_workdir_is_the_root() {
         let d = TempDir::new();
         let root = d.path().join("home");
         make_estate(
             &root,
             "garden",
-            "---\nworktree:\n  repo: \"\"\n  branch: wt/site-work\n---\n",
+            "---\nworktree:\n  repo: x\n  branch: y\n---\n",
         );
         let estates = estates_with(row(&root));
         let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.workdir, root);
-    }
-
-    #[test]
-    fn resolve_never_creates_the_worktree() {
-        let d = TempDir::new();
-        let root = d.path().join("home");
-        let repo_dir = d.path().join("repo");
-        init_git_repo(&repo_dir);
-        make_estate(
-            &root,
-            "garden",
-            &format!(
-                "---\nworktree:\n  repo: {}\n  branch: wt/site-work\n---\n",
-                repo_dir.display()
-            ),
-        );
-        let estates = estates_with(row(&root));
-        let _g = crate::test_support::EnvGuard::set(&[(
-            "HERDR_PLUGIN_STATE_DIR",
-            d.path().join("state").to_str().unwrap(),
-        )]);
-        let c = resolve(&estates, "home/garden").unwrap();
-        assert!(!c.workdir.exists());
-        assert_eq!(
-            c.worktree,
-            Some(WorktreeSpec {
-                repo: repo_dir.display().to_string(),
-                branch: "wt/site-work".to_string(),
-            })
-        );
-        let listing = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&repo_dir)
-            .args(["worktree", "list"])
-            .output()
-            .unwrap();
-        assert_eq!(
-            String::from_utf8_lossy(&listing.stdout).lines().count(),
-            1,
-            "resolve must not add a worktree"
-        );
     }
 
     #[test]
@@ -943,24 +784,5 @@ mod tests {
         let c = resolve(&estates, "home/garden").unwrap();
         assert_eq!(c.add_dirs, Vec::<PathBuf>::new());
         assert!(c.kind_flags.is_empty());
-    }
-
-    fn init_git_repo(path: &Path) {
-        std::fs::create_dir_all(path).unwrap();
-        let run = |args: &[&str]| {
-            let status = std::process::Command::new("git")
-                .arg("-C")
-                .arg(path)
-                .args(args)
-                .status()
-                .unwrap();
-            assert!(status.success());
-        };
-        run(&["init", "-b", "main"]);
-        run(&["config", "user.email", "test@example.com"]);
-        run(&["config", "user.name", "Test"]);
-        std::fs::write(path.join("README.md"), "hello\n").unwrap();
-        run(&["add", "README.md"]);
-        run(&["commit", "-m", "init"]);
     }
 }

@@ -19,7 +19,6 @@ mod prompt;
 mod sort;
 mod verb;
 mod verbs;
-mod worktree;
 
 #[cfg(test)]
 pub(crate) mod test_support {

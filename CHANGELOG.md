@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Removed the campaign `worktree` table, with the worktrees herdr-estate
+  made for it. A `worktree:` key left in a campaign.md is ignored like
+  any other unknown key; the agent starts in the estate root.
 - Removed the `~/.config/herdr-estate/estates.toml` fallback; the estate
   table is read only from herdr's plugin config dir.
 

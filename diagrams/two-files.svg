@@ -52,11 +52,9 @@
     <text x="112" y="444" font-size="9" fill="#ffffff" opacity="0.85" font-family="Menlo, monospace">paths:</text>
     <text x="196" y="444" font-size="9" fill="#ffffff" opacity="0.85" font-family="Menlo, monospace">agent:</text>
     <text x="280" y="444" font-size="9" fill="#ffffff" opacity="0.85" font-family="Menlo, monospace">claude:</text>
-    <text x="364" y="444" font-size="9" fill="#ffffff" opacity="0.85" font-family="Menlo, monospace">worktree:</text>
     <text x="112" y="462" font-size="9" fill="#ffffff" opacity="0.85">unknown keys are ignored, not rejected</text>
     <text x="112" y="478" font-size="9" fill="#ffffff" opacity="0.85">generic keys map through a per-kind adapter</text>
-    <text x="112" y="494" font-size="9" fill="#ffffff" opacity="0.85">worktree: repo and branch, made if missing; the agent starts in it</text>
-    <text x="112" y="510" font-size="9" fill="#ffffff" opacity="0.85">list the estate root in paths to keep log.md in reach</text>
+    <text x="112" y="494" font-size="9" fill="#ffffff" opacity="0.85">list the estate root in paths to keep log.md in reach</text>
     <!-- the continuity log -->
     <rect x="616" y="382" width="492" height="140" rx="4" fill="#f4f4f4" stroke="#e0e0e0" stroke-width="1"/>
     <text x="636" y="402" font-size="8" fill="#707070" font-family="Menlo, monospace" letter-spacing="0.08em">CONTINUITY</text>

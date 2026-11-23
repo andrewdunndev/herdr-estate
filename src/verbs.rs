@@ -722,7 +722,7 @@ fn open_workspace(
     verb: Verb,
     conversation_id: &str,
 ) -> Result<(String, String), EstateError> {
-    let campaign = &campaign::materialise(resolved)?;
+    let campaign = resolved;
     let create_cmd = &create_args(campaign, false);
     let agent_argv = &build_agent_argv(campaign, verb, conversation_id);
     prompt::write_prompt(campaign)?;
@@ -837,12 +837,6 @@ fn dry_run_plan(
             }
         }
     };
-    if campaign.worktree.is_some() {
-        println!(
-            "{address}: would ensure worktree: {}",
-            campaign.workdir.display()
-        );
-    }
     let start_cmd: Vec<String> = match agent_pane {
         Some(pane) => start_cmd
             .iter()
@@ -1289,7 +1283,6 @@ mod tests {
             kind_flags: BTreeMap::new(),
             env: BTreeMap::from([("K".to_string(), "V".to_string())]),
             prepare: None,
-            worktree: None,
         }
     }
 
@@ -1731,7 +1724,6 @@ mod tests {
             kind_flags: Default::default(),
             env: Default::default(),
             prepare: None,
-            worktree: None,
         }
     }
 
